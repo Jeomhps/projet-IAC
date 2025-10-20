@@ -38,16 +38,6 @@ Vagrant.configure("2") do |config|
 
 [all:vars]
 ansible_python_interpreter=/usr/bin/python3
-EOF
 
-    # site.yml vide mais prêt à remplir
-    cat > /home/vagrant/ansible/site.yml <<EOF
-- hosts: local
-  become: yes
-  roles:
-    - user-management
-    - docker-resources
-    - audit-logging
-EOF
   SHELL
 end
