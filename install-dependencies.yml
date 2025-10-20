@@ -68,13 +68,22 @@
     #     source: pull
     #     tag: latest
 
-    - name: Build custom Ubuntu image
+    - name: Get Dockerfile hash
+      ansible.builtin.stat:
+        path: /vagrant/Dockerfile
+        checksum_algorithm: sha256
+      register: dockerfile_hash
+
+    - name: Build custom Alpine image (if Dockerfile changed)
       community.docker.docker_image:
         name: custom-alpine-ansible
         build:
           path: /vagrant
           pull: yes
+          args:
+            DOCKERFILE_HASH: "{{ dockerfile_hash.stat.checksum }}"
         source: build
+      when: dockerfile_hash.stat.checksum is defined
 
     - name: Run 10 custom Alpine containers with SSH
       community.docker.docker_container:
@@ -84,4 +93,6 @@
         detach: yes
         ports:
           - "222{{ item }}:22"
+        recreate: yes  # Recreate container if image changes
       loop: "{{ range(1, 11) | list }}"
+
