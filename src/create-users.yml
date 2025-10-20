@@ -1,0 +1,28 @@
+---
+- name: Create user in Alpine Docker containers
+  hosts: all  # Target all hosts passed via --extra-vars
+  become: yes
+  vars:
+    username: "oui"
+    password: "test"  # Hardcoded password
+  tasks:
+    # - name: Create user
+    #   ansible.builtin.user:
+    #     name: "{{ username }}"
+    #     password: "{{ password | password_hash('sha512') }}"
+    #     shell: /bin/sh
+    #     groups: wheel
+    - name: Create user (force update)
+      ansible.builtin.user:
+        name: "{{ username }}"
+        password: "{{ password | password_hash('sha512') }}"
+        shell: /bin/sh
+        groups: wheel
+        create_home: yes
+        update_password: always
+
+    # - name: Allow passwordless sudo for the user
+    #   ansible.builtin.lineinfile:
+    #     path: /etc/sudoers
+    #     line: "{{ username }} ALL=(ALL) NOPASSWD:ALL"
+    #     validate: 'visudo -cf %s'
