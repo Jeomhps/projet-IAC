@@ -61,3 +61,18 @@
         name: docker
         state: started
         enabled: yes
+
+    - name: Pull Ubuntu image
+      community.docker.docker_image:
+        name: ubuntu
+        source: pull
+        tag: latest
+
+    - name: Run 10 Ubuntu containers
+      community.docker.docker_container:
+        name: "ubuntu-container-{{ item }}"
+        image: ubuntu:latest
+        state: started
+        detach: yes
+        command: ["tail", "-f", "/dev/null"]  # Keep container running
+      loop: "{{ range(1, 11) | list }}"
