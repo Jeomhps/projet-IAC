@@ -11,6 +11,7 @@ Vagrant.configure("2") do |config|
 
   config.ssh.insert_key = true
 
+  # Ansible needs to be installed on the host for this to work
   config.vm.provision "ansible" do |ansible|
     ansible.playbook = "install-dependencies.yml"
     ansible.verbose = "v"
