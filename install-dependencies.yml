@@ -3,9 +3,11 @@
   hosts: all
   become: yes
   tasks:
-    - name: Install Ansible
+    - name: Install Ansible, pip, and python3-docker
       ansible.builtin.apt:
-        name: ansible
+        name:
+          - ansible
+          - python3-docker  # <-- Install via apt instead of pip
         state: present
         update_cache: yes
 
@@ -16,13 +18,11 @@
           ansible.builtin.apt_key:
             url: https://download.docker.com/linux/ubuntu/gpg
             state: present
-
         - name: Add Docker repository (AMD64)
           ansible.builtin.apt_repository:
             repo: "deb [arch=amd64] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
             state: present
             update_cache: yes
-
         - name: Install Docker packages (AMD64)
           ansible.builtin.apt:
             name:
@@ -32,7 +32,6 @@
             state: present
             update_cache: yes
 
-    # used by macos since it emulates arm64
     - name: Install Docker for ARM64
       when: ansible_architecture == "aarch64"
       block:
@@ -40,13 +39,11 @@
           ansible.builtin.apt_key:
             url: https://download.docker.com/linux/ubuntu/gpg
             state: present
-
         - name: Add Docker repository (ARM64)
           ansible.builtin.apt_repository:
             repo: "deb [arch=arm64] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
             state: present
             update_cache: yes
-
         - name: Install Docker packages (ARM64)
           ansible.builtin.apt:
             name:
@@ -62,11 +59,19 @@
         state: started
         enabled: yes
 
-    # - name: Pull Ubuntu image
-    #   community.docker.docker_image:
-    #     name: ubuntu
-    #     source: pull
-    #     tag: latest
+    - name: Prune Docker containers and networks (no images)
+      community.docker.docker_prune:
+        containers: yes
+        images: no       # Skip pruning images
+        networks: yes
+        volumes: no      # Skip pruning volumes
+        builder_cache: no  # Skip pruning builder cache
+      register: prune_result
+
+    - name: Restart Docker daemon
+      ansible.builtin.service:
+        name: docker
+        state: restarted
 
     - name: Get Dockerfile hash
       ansible.builtin.stat:
@@ -82,6 +87,7 @@
           pull: yes
           args:
             DOCKERFILE_HASH: "{{ dockerfile_hash.stat.checksum }}"
+            PASSWORD: "test"
         source: build
       when: dockerfile_hash.stat.checksum is defined
 
@@ -93,6 +99,6 @@
         detach: yes
         ports:
           - "222{{ item }}:22"
-        recreate: yes  # Recreate container if image changes
+        recreate: yes
       loop: "{{ range(1, 11) | list }}"
-
+      #delay: 5

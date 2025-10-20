@@ -1,18 +1,23 @@
 FROM alpine:latest
 
-# Install Python, SSH, sudo, and bash
-RUN apk add --no-cache python3 py3-pip openssh-server sudo bash && \
-    mkdir -p /run/sshd && \
-    ssh-keygen -A && \  # Generate SSH host keys
-    echo 'root:yourpassword' | chpasswd && \
-    sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config && \
-    sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
+# Arguement for Password
+ARG PASSWORD=password
 
-# Create and set up the entrypoint script
-RUN echo '#!/bin/sh' > /entrypoint.sh && \
-    echo '/usr/sbin/sshd -D &' >> /entrypoint.sh && \
-    echo 'tail -f /dev/null' >> /entrypoint.sh && \
-    chmod +x /entrypoint.sh
+# Installing the openssh and bash package, removing the apk cache
+RUN apk --update add --no-cache python3 py3-pip openssh bash \
+  && sed -i s/#PermitRootLogin.*/PermitRootLogin\ yes/ /etc/ssh/sshd_config \
+  && echo "root:${PASSWORD}" | chpasswd \
+  && rm -rf /var/cache/apk/*
+
+# Defining the Port 22 for service
+RUN sed -ie 's/#Port 22/Port 22/g' /etc/ssh/sshd_config
+RUN /usr/bin/ssh-keygen -A
+RUN ssh-keygen -t rsa -b 4096 -f  /etc/ssh/ssh_host_key
+
+ENV NOTVISIBLE "in users profile"
+
+RUN echo "export VISIBLE=now" >> /etc/profile
 
 EXPOSE 22
-ENTRYPOINT ["/entrypoint.sh"]
+
+CMD ["/usr/sbin/sshd", "-D"]
