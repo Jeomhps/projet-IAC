@@ -1,0 +1,56 @@
+---
+- name: Install Docker based on architecture
+  hosts: all
+  become: yes
+  tasks:
+    - name: Install Docker for AMD64 (x86_64)
+      when: ansible_architecture == "x86_64"
+      block:
+        - name: Add Docker GPG key (AMD64)
+          ansible.builtin.apt_key:
+            url: https://download.docker.com/linux/ubuntu/gpg
+            state: present
+
+        - name: Add Docker repository (AMD64)
+          ansible.builtin.apt_repository:
+            repo: "deb [arch=amd64] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
+            state: present
+            update_cache: yes
+
+        - name: Install Docker packages (AMD64)
+          ansible.builtin.apt:
+            name:
+              - docker-ce
+              - docker-ce-cli
+              - containerd.io
+            state: present
+            update_cache: yes
+
+    - name: Install Docker for ARM64
+      when: ansible_architecture == "aarch64"
+      block:
+        - name: Add Docker GPG key (ARM64)
+          ansible.builtin.apt_key:
+            url: https://download.docker.com/linux/ubuntu/gpg
+            state: present
+
+        - name: Add Docker repository (ARM64)
+          ansible.builtin.apt_repository:
+            repo: "deb [arch=arm64] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
+            state: present
+            update_cache: yes
+
+        - name: Install Docker packages (ARM64)
+          ansible.builtin.apt:
+            name:
+              - docker-ce
+              - docker-ce-cli
+              - containerd.io
+            state: present
+            update_cache: yes
+
+    - name: Ensure Docker is running and enabled
+      ansible.builtin.service:
+        name: docker
+        state: started
+        enabled: yes
