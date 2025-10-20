@@ -4,7 +4,7 @@ FROM alpine:latest
 ARG PASSWORD=password
 
 # Installing the openssh and bash package, removing the apk cache
-RUN apk --update add --no-cache python3 py3-pip openssh bash \
+RUN apk --update add --no-cache python3 py3-pip openssh bash sudo \
   && sed -i s/#PermitRootLogin.*/PermitRootLogin\ yes/ /etc/ssh/sshd_config \
   && echo "root:${PASSWORD}" | chpasswd \
   && rm -rf /var/cache/apk/*
