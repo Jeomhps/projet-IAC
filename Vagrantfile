@@ -1,7 +1,6 @@
-VAGRANTFILE_API_VERSION = "2"
-
-Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
-  config.vm.box = "ubuntu/focal64"
+Vagrant.configure("2") do |config|
+  config.vm.box = "hashicorp-education/ubuntu-24-04"
+  config.vm.box_version = "0.1.0"
   config.vm.hostname = "VM-ressources"
   config.vm.network "private_network", ip: "192.168.56.20"
 
