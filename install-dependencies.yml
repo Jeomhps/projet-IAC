@@ -1,8 +1,14 @@
 ---
-- name: Install Docker based on architecture
+- name: Install Dependencies
   hosts: all
   become: yes
   tasks:
+    - name: Install Ansible
+      ansible.builtin.apt:
+        name: ansible
+        state: present
+        update_cache: yes
+
     - name: Install Docker for AMD64 (x86_64)
       when: ansible_architecture == "x86_64"
       block:
@@ -26,6 +32,7 @@
             state: present
             update_cache: yes
 
+    # used by macos since it emulates arm64
     - name: Install Docker for ARM64
       when: ansible_architecture == "aarch64"
       block:
