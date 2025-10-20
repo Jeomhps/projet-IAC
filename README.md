@@ -52,7 +52,6 @@ curl "http://localhost:8080/reserve?username=alice&password=test&count=2"
 | `just setup` | Install dependencies and set up the virtual environment. |
 | `just run` | Start the Flask API. |
 | `just provision` | Provision Docker containers using Ansible. |
-| `just test-playbook username="dog" password="test" count=2` | Test the user creation playbook. |
 | `just clean` | Remove the virtual environment and database. |
 
 ---
