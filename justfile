@@ -12,7 +12,7 @@ setup:
 
 # Run the API
 run:
-    python3 {{API_DIR}}/api.py
+    . {{VENV_DIR}}/bin/activate && python3 {{API_DIR}}/api.py
 
 # Provision containers (using inventory.ini)
 provision:
