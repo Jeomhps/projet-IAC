@@ -1,0 +1,20 @@
+---
+- name: Manage user in Alpine Docker containers
+  hosts: all
+  become: yes
+  tasks:
+    - name: Create user
+      ansible.builtin.user:
+        name: "{{ username }}"
+        password: "{{ password | password_hash('sha512') }}"
+        shell: /bin/sh
+        groups: wheel
+        state: present
+      when: action == 'create'
+
+    - name: Delete user
+      ansible.builtin.user:
+        name: "{{ username }}"
+        state: absent
+        remove: yes
+      when: action == 'delete'
