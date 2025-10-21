@@ -22,7 +22,7 @@ setup_logging()
 
 def create_app():
     app = Flask(__name__)
-    app.config["JSONIFY_PRETTYPRINT_REGULAR"] = True  # Pretty-print JSON responses!
+    app.config["JSONIFY_PRETTYPRINT_REGULAR"] = True
     init_db()
     app.register_blueprint(machines_bp)
     app.register_blueprint(reservations_bp)
@@ -31,4 +31,4 @@ def create_app():
 
 if __name__ == "__main__":
     app = create_app()
-    app.run(host="0.0.0.0", port=8080, debug=False)
+    app.run(host="0.0.0.0", port=8080)

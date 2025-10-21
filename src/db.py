@@ -13,20 +13,25 @@ def init_db():
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     cursor = conn.cursor()
     cursor.execute("""
-    CREATE TABLE IF NOT EXISTS reservations (
-        username TEXT,
-        container_name TEXT,
-        reserved_until TEXT,
-        PRIMARY KEY (username, container_name)
-    )
-    """)
-    cursor.execute("""
     CREATE TABLE IF NOT EXISTS machines (
-        name TEXT PRIMARY KEY,
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT UNIQUE NOT NULL,
         host TEXT NOT NULL,
         port INTEGER NOT NULL,
         user TEXT NOT NULL,
-        password TEXT NOT NULL
+        password TEXT NOT NULL,
+        reserved INTEGER NOT NULL DEFAULT 0,
+        reserved_by TEXT,
+        reserved_until TEXT
+    )
+    """)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS reservations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        machine_id INTEGER NOT NULL,
+        username TEXT NOT NULL,
+        reserved_until TEXT,
+        FOREIGN KEY (machine_id) REFERENCES machines(id) ON DELETE CASCADE
     )
     """)
     conn.commit()

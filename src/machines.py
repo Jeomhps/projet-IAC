@@ -40,10 +40,23 @@ def delete_machine(name):
 @machines_bp.route("/machines", methods=["GET"])
 def list_machines():
     conn, cursor = get_conn_cursor()
-    cursor.execute("SELECT name, host, port, user FROM machines")
+    cursor.execute("""
+        SELECT id, name, host, port, user, password, reserved, reserved_by, reserved_until
+        FROM machines
+    """)
     machines = [
-        {"name": name, "host": host, "port": port, "user": user}
-        for name, host, port, user in cursor.fetchall()
+        {
+            "id": id,
+            "name": name,
+            "host": host,
+            "port": port,
+            "user": user,
+            "password": password,
+            "reserved": bool(reserved),
+            "reserved_by": reserved_by,
+            "reserved_until": reserved_until
+        }
+        for id, name, host, port, user, password, reserved, reserved_by, reserved_until in cursor.fetchall()
     ]
     logger.info(f"Listing {len(machines)} machines.")
     return jsonify({"machines": machines}), 200

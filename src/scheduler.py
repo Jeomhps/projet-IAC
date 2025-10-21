@@ -1,7 +1,6 @@
 import logging
 from apscheduler.schedulers.background import BackgroundScheduler
 import atexit
-from db import get_conn_cursor
 
 logger = logging.getLogger(__name__)
 

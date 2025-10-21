@@ -10,10 +10,15 @@ from utils import sha512_hash_openssl
 logger = logging.getLogger(__name__)
 reservations_bp = Blueprint('reservations', __name__)
 
-def get_machine_pool():
+def get_available_machines():
     conn, cursor = get_conn_cursor()
-    cursor.execute("SELECT name, host, port, user, password FROM machines")
+    cursor.execute("SELECT id, name, host, port, user, password FROM machines WHERE reserved = 0")
     return cursor.fetchall()
+
+def get_machine_by_id(machine_id):
+    conn, cursor = get_conn_cursor()
+    cursor.execute("SELECT id, name, host, port, user, password FROM machines WHERE id = ?", (machine_id,))
+    return cursor.fetchone()
 
 @reservations_bp.route("/reserve")
 def reserve_containers():
@@ -28,27 +33,18 @@ def reserve_containers():
         return jsonify({"error": "Username is required."}), 400
 
     hashed_password = sha512_hash_openssl(password)
-    cursor.execute("""
-        SELECT container_name
-        FROM reservations
-        WHERE reserved_until > ?
-    """, (datetime.now().isoformat(timespec="seconds"),))
-    reserved_containers = [row[0] for row in cursor.fetchall()]
-
-    machines = get_machine_pool()
-    available_machines = [m for m in machines if m[0] not in reserved_containers]
+    available_machines = get_available_machines()
 
     if len(available_machines) < count:
         logger.warning(f"Not enough available machines for user '{username}'. Requested {count}, got {len(available_machines)}.")
         return jsonify({"error": f"Only {len(available_machines)} machines available"}), 400
 
     reserved = available_machines[:count]
-    reserved_names = [m[0] for m in reserved]
     reserved_until = (datetime.now() + timedelta(minutes=duration)).isoformat(timespec="seconds")
 
     playbook_path = os.path.join(os.path.dirname(__file__), "create-users.yml")
     with tempfile.NamedTemporaryFile(mode='w', delete=False) as temp_inventory:
-        for name, host, port, user, machine_password in reserved:
+        for id, name, host, port, user, machine_password in reserved:
             temp_inventory.write(
                 f"{name} ansible_host={host} ansible_port={port} ansible_user={user} ansible_password={machine_password}\n"
             )
@@ -66,16 +62,19 @@ def reserve_containers():
             logger.error(f"Ansible failed for user '{username}': {result.stderr}")
             return jsonify({"error": "Failed to create user", "ansible_error": result.stderr}), 500
 
-        for name in reserved_names:
+        connection_details = []
+        for id, name, host, port, user, machine_password in reserved:
             cursor.execute(
-                "INSERT OR REPLACE INTO reservations VALUES (?, ?, ?)",
-                (username, name, reserved_until)
+                "INSERT INTO reservations (machine_id, username, reserved_until) VALUES (?, ?, ?)",
+                (id, username, reserved_until)
             )
+            cursor.execute(
+                "UPDATE machines SET reserved = 1, reserved_by = ?, reserved_until = ? WHERE id = ?",
+                (username, reserved_until, id)
+            )
+            connection_details.append({"machine": name, "host": host, "port": port})
+
         conn.commit()
-        connection_details = [
-            {"machine": name, "host": host, "port": port}
-            for name, host, port, user, machine_password in reserved
-        ]
         logger.info(f"Reserved {count} machines for user '{username}' until {reserved_until}")
         return jsonify({
             "username": username,
@@ -91,27 +90,26 @@ def reserve_containers():
 @reservations_bp.route("/release_all")
 def release_all_containers():
     conn, cursor = get_conn_cursor()
-    cursor.execute("SELECT username, container_name FROM reservations")
+    cursor.execute("SELECT r.id, r.machine_id, m.name, r.username FROM reservations r JOIN machines m ON r.machine_id = m.id")
     all_reservations = cursor.fetchall()
     if not all_reservations:
         logger.info("No machines to release.")
         return jsonify({"message": "No machines to release."}), 200
 
-    users_to_delete = {}
-    for username, container in all_reservations:
-        users_to_delete.setdefault(username, []).append(container)
-
     playbook_path = os.path.join(os.path.dirname(__file__), "create-users.yml")
-    for username, containers in users_to_delete.items():
+    users_to_delete = {}
+    for res_id, machine_id, machine_name, username in all_reservations:
+        users_to_delete.setdefault(username, []).append((machine_id, machine_name))
+
+    for username, machine_tuples in users_to_delete.items():
+        ids = [str(m[0]) for m in machine_tuples]
         cursor.execute(
-            "SELECT name, host, port, user, password FROM machines WHERE name IN ({})".format(
-                ",".join("?" for _ in containers)
-            ),
-            containers,
+            f"SELECT id, name, host, port, user, password FROM machines WHERE id IN ({','.join(['?']*len(ids))})",
+            ids,
         )
         machines_info = cursor.fetchall()
         with tempfile.NamedTemporaryFile(mode='w', delete=False) as temp_inventory:
-            for name, host, port, user, machine_password in machines_info:
+            for id, name, host, port, user, machine_password in machines_info:
                 temp_inventory.write(
                     f"{name} ansible_host={host} ansible_port={port} ansible_user={user} ansible_password={machine_password}\n"
                 )
@@ -130,7 +128,11 @@ def release_all_containers():
             if os.path.exists(temp_inventory_path):
                 os.unlink(temp_inventory_path)
 
-    cursor.execute("DELETE FROM reservations")
+        # Update machine status and remove reservation
+        for machine_id, machine_name in machine_tuples:
+            cursor.execute("UPDATE machines SET reserved = 0, reserved_by = NULL, reserved_until = NULL WHERE id = ?", (machine_id,))
+            cursor.execute("DELETE FROM reservations WHERE machine_id = ? AND username = ?", (machine_id, username))
+
     conn.commit()
     logger.info("Released all machines and deleted users.")
     return jsonify({"message": "All machines released"}), 200
@@ -138,28 +140,24 @@ def release_all_containers():
 @reservations_bp.route("/available")
 def available_containers():
     conn, cursor = get_conn_cursor()
-    cursor.execute("""
-        SELECT container_name
-        FROM reservations
-        WHERE reserved_until > ?
-    """, (datetime.now().isoformat(timespec="seconds"),))
-    reserved_containers = [row[0] for row in cursor.fetchall()]
-    machines = get_machine_pool()
-    available = [m[0] for m in machines if m[0] not in reserved_containers]
-    logger.info(f"Available: {len(available)}, Reserved: {len(reserved_containers)}")
+    cursor.execute("SELECT name FROM machines WHERE reserved = 0")
+    available = [row[0] for row in cursor.fetchall()]
+    cursor.execute("SELECT name FROM machines WHERE reserved = 1")
+    reserved = [row[0] for row in cursor.fetchall()]
+    logger.info(f"Available: {len(available)}, Reserved: {len(reserved)}")
     return jsonify({
         "available": available,
-        "reserved": reserved_containers
+        "reserved": reserved
     }), 200
 
 @reservations_bp.route("/reservations")
 def list_reservations():
     conn, cursor = get_conn_cursor()
     cursor.execute("""
-        SELECT username, container_name, reserved_until
-        FROM reservations
-        WHERE reserved_until > ?
-    """, (datetime.now().isoformat(timespec="seconds"),))
+        SELECT r.username, m.name, r.reserved_until
+        FROM reservations r
+        JOIN machines m ON r.machine_id = m.id
+    """)
     reservations = cursor.fetchall()
     result = []
     now = datetime.now()
@@ -179,32 +177,26 @@ def list_reservations():
 def handle_expired_reservations():
     conn, cursor = get_conn_cursor()
     cursor.execute("""
-        SELECT username, container_name
-        FROM reservations
-        WHERE reserved_until <= ?
+        SELECT r.id, r.machine_id, r.username, r.reserved_until, m.name, m.host, m.port, m.user, m.password
+        FROM reservations r
+        JOIN machines m ON r.machine_id = m.id
+        WHERE r.reserved_until <= ?
     """, (datetime.now().isoformat(timespec="seconds"),))
     expired_reservations = cursor.fetchall()
     if not expired_reservations:
         logger.info("No expired reservations to clean up.")
         return
 
-    users_to_delete = {}
-    for username, container in expired_reservations:
-        users_to_delete.setdefault(username, []).append(container)
-
     playbook_path = os.path.join(os.path.dirname(__file__), "create-users.yml")
-    for username, containers in users_to_delete.items():
-        cursor.execute(
-            "SELECT name, host, port, user, password FROM machines WHERE name IN ({})".format(
-                ",".join("?" for _ in containers)
-            ),
-            containers,
-        )
-        machines_info = cursor.fetchall()
+    users_to_delete = {}
+    for res_id, machine_id, username, reserved_until, name, host, port, user, password in expired_reservations:
+        users_to_delete.setdefault(username, []).append((machine_id, name, host, port, user, password, res_id))
+
+    for username, machine_tuples in users_to_delete.items():
         with tempfile.NamedTemporaryFile(mode='w', delete=False) as temp_inventory:
-            for name, host, port, user, machine_password in machines_info:
+            for machine_id, name, host, port, user, password, res_id in machine_tuples:
                 temp_inventory.write(
-                    f"{name} ansible_host={host} ansible_port={port} ansible_user={user} ansible_password={machine_password}\n"
+                    f"{name} ansible_host={host} ansible_port={port} ansible_user={user} ansible_password={password}\n"
                 )
             temp_inventory_path = temp_inventory.name
 
@@ -218,10 +210,9 @@ def handle_expired_reservations():
         finally:
             if os.path.exists(temp_inventory_path):
                 os.unlink(temp_inventory_path)
-        for container in containers:
-            cursor.execute(
-                "DELETE FROM reservations WHERE username = ? AND container_name = ?",
-                (username, container)
-            )
-        conn.commit()
+
+        for machine_id, name, host, port, user, password, res_id in machine_tuples:
+            cursor.execute("UPDATE machines SET reserved = 0, reserved_by = NULL, reserved_until = NULL WHERE id = ?", (machine_id,))
+            cursor.execute("DELETE FROM reservations WHERE id = ?", (res_id,))
+    conn.commit()
     logger.info(f"Cleaned up {len(expired_reservations)} expired reservations.")
