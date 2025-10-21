@@ -1,3 +1,4 @@
+import logging
 from flask import Flask, jsonify, request
 import subprocess
 import sqlite3
@@ -6,6 +7,9 @@ import os
 from datetime import datetime, timedelta
 from apscheduler.schedulers.background import BackgroundScheduler
 import atexit
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
@@ -17,7 +21,6 @@ db_path = os.path.join(script_dir, "containers.db")
 conn = sqlite3.connect(db_path, check_same_thread=False)
 cursor = conn.cursor()
 
-# Create table with proper timestamp type
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS reservations (
     username TEXT,
@@ -28,17 +31,12 @@ CREATE TABLE IF NOT EXISTS reservations (
 """)
 conn.commit()
 
-# Container pool
 CONTAINER_POOL = [f"alpine-{i}" for i in range(1, 11)]
-
-# Path to the Ansible playbook
 playbook_path = os.path.join(script_dir, "create-users.yml")
 
-# Initialize scheduler
 scheduler = BackgroundScheduler()
 scheduler.start()
 
-# Shutdown scheduler when app exits
 @atexit.register
 def shutdown_scheduler():
     scheduler.shutdown()
@@ -49,9 +47,8 @@ def sha512_hash_openssl(password):
 
 def delete_expired_users():
     with app.app_context():
-        print(f"[{datetime.now()}] Checking for expired reservations...")
+        logger.info(f"[{datetime.now()}] Checking for expired reservations...")
 
-        # Find expired reservations using proper timestamp comparison
         cursor.execute("""
             SELECT username, container_name
             FROM reservations
@@ -60,18 +57,13 @@ def delete_expired_users():
         expired_reservations = cursor.fetchall()
 
         if expired_reservations:
-            print(f"[{datetime.now()}] Found {len(expired_reservations)} expired reservations")
+            logger.info(f"[{datetime.now()}] Found {len(expired_reservations)} expired reservations")
 
-            # Group containers by username
             users_to_delete = {}
             for username, container in expired_reservations:
-                if username not in users_to_delete:
-                    users_to_delete[username] = []
-                users_to_delete[username].append(container)
+                users_to_delete.setdefault(username, []).append(container)
 
-            # Delete each user from their containers
             for username, containers in users_to_delete.items():
-                # Create a temporary inventory file for these containers
                 with tempfile.NamedTemporaryFile(mode='w', delete=False) as temp_inventory:
                     for container in containers:
                         port = 2220 + int(container.split('-')[-1])
@@ -79,7 +71,6 @@ def delete_expired_users():
                     temp_inventory_path = temp_inventory.name
 
                 try:
-                    # Run Ansible to delete the user
                     result = subprocess.run([
                         "ansible-playbook",
                         "-i", temp_inventory_path,
@@ -87,17 +78,15 @@ def delete_expired_users():
                         "--extra-vars", f"username={username} user_action=delete"
                     ], capture_output=True, text=True)
 
-                    print(f"[{datetime.now()}] Deleting user {username} from containers: {containers}")
-                    print("Ansible output:", result.stdout)
+                    logger.info(f"[{datetime.now()}] Deleting user {username} from containers: {containers}")
+                    logger.info("Ansible output:\n%s", result.stdout)
                     if result.returncode != 0:
-                        print("Ansible error:", result.stderr)
+                        logger.error("Ansible error:\n%s", result.stderr)
 
                 finally:
-                    # Clean up the temporary file
                     if os.path.exists(temp_inventory_path):
                         os.unlink(temp_inventory_path)
 
-                # Remove the reservations from the database
                 for container in containers:
                     cursor.execute("""
                         DELETE FROM reservations
@@ -105,9 +94,8 @@ def delete_expired_users():
                     """, (username, container))
                 conn.commit()
         else:
-            print(f"[{datetime.now()}] No expired reservations found")
+            logger.info(f"[{datetime.now()}] No expired reservations found")
 
-# Schedule the cleanup job to run every minute
 scheduler.add_job(delete_expired_users, 'interval', minutes=1)
 
 @app.route("/reserve")
@@ -115,12 +103,10 @@ def reserve_containers():
     username = request.args.get("username")
     password = request.args.get("password", "test")
     count = int(request.args.get("count", 1))
-    duration = int(request.args.get("duration", 60))  # Default to 60 minutes
+    duration = int(request.args.get("duration", 60))
 
-    # Hash the password on the control node using OpenSSL
     hashed_password = sha512_hash_openssl(password)
 
-    # Check available containers
     cursor.execute("""
         SELECT container_name
         FROM reservations
@@ -132,11 +118,9 @@ def reserve_containers():
     if len(available_containers) < count:
         return jsonify({"error": f"Only {len(available_containers)} containers available"}), 400
 
-    # Reserve containers with custom duration
     reserved = available_containers[:count]
     reserved_until = datetime.now() + timedelta(minutes=duration)
 
-    # Create a temporary inventory file
     with tempfile.NamedTemporaryFile(mode='w', delete=False) as temp_inventory:
         for container in reserved:
             port = 2220 + int(container.split('-')[-1])
@@ -144,7 +128,6 @@ def reserve_containers():
         temp_inventory_path = temp_inventory.name
 
     try:
-        # Run Ansible with the temporary inventory file to create users
         result = subprocess.run([
             "ansible-playbook",
             "-i", temp_inventory_path,
@@ -152,13 +135,12 @@ def reserve_containers():
             "--extra-vars", f"username={username} hashed_password={hashed_password} user_action=create"
         ], capture_output=True, text=True)
 
-        print(f"[{datetime.now()}] Creating user {username} on containers: {reserved}")
-        print("Ansible output:", result.stdout)
+        logger.info(f"[{datetime.now()}] Creating user {username} on containers: {reserved}")
+        logger.info("Ansible output:\n%s", result.stdout)
         if result.returncode != 0:
-            print("Ansible error:", result.stderr)
+            logger.error("Ansible error:\n%s", result.stderr)
             return jsonify({"error": "Failed to create user", "details": result.stderr}), 500
 
-        # Save reservations with proper timestamp
         for container in reserved:
             cursor.execute("""
                 INSERT OR REPLACE INTO reservations
@@ -166,7 +148,6 @@ def reserve_containers():
             """, (username, container, reserved_until))
         conn.commit()
 
-        # Return connection details
         connection_details = [
             {"container": c, "host": "localhost", "port": 2220 + int(c.split('-')[-1])}
             for c in reserved
@@ -181,29 +162,22 @@ def reserve_containers():
             "duration_minutes": duration
         })
     finally:
-        # Clean up the temporary file
         if 'temp_inventory_path' in locals() and os.path.exists(temp_inventory_path):
             os.unlink(temp_inventory_path)
 
 @app.route("/release_all")
 def release_all_containers():
-    # Find all current reservations
     cursor.execute("SELECT username, container_name FROM reservations")
     all_reservations = cursor.fetchall()
 
     if not all_reservations:
         return jsonify({"status": "success", "message": "No containers to release"})
 
-    # Group containers by username
     users_to_delete = {}
     for username, container in all_reservations:
-        if username not in users_to_delete:
-            users_to_delete[username] = []
-        users_to_delete[username].append(container)
+        users_to_delete.setdefault(username, []).append(container)
 
-    # Delete each user from their containers
     for username, containers in users_to_delete.items():
-        # Create a temporary inventory file for these containers
         with tempfile.NamedTemporaryFile(mode='w', delete=False) as temp_inventory:
             for container in containers:
                 port = 2220 + int(container.split('-')[-1])
@@ -211,7 +185,6 @@ def release_all_containers():
             temp_inventory_path = temp_inventory.name
 
         try:
-            # Run Ansible to delete the user
             result = subprocess.run([
                 "ansible-playbook",
                 "-i", temp_inventory_path,
@@ -219,17 +192,15 @@ def release_all_containers():
                 "--extra-vars", f"username={username} user_action=delete"
             ], capture_output=True, text=True)
 
-            print(f"[{datetime.now()}] Deleting user {username} from containers: {containers}")
-            print("Ansible output:", result.stdout)
+            logger.info(f"[{datetime.now()}] Deleting user {username} from containers: {containers}")
+            logger.info("Ansible output:\n%s", result.stdout)
             if result.returncode != 0:
-                print("Ansible error:", result.stderr)
+                logger.error("Ansible error:\n%s", result.stderr)
 
         finally:
-            # Clean up the temporary file
             if os.path.exists(temp_inventory_path):
                 os.unlink(temp_inventory_path)
 
-    # Remove all reservations from the database
     cursor.execute("DELETE FROM reservations")
     conn.commit()
 
