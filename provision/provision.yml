@@ -7,12 +7,6 @@
     docker_password: "test"
     container_count: 10
   tasks:
-    - name: Get Dockerfile hash
-      ansible.builtin.stat:
-        path: "./Dockerfile"
-        checksum_algorithm: sha256
-      register: dockerfile_hash
-
     - name: Build custom Alpine image (if Dockerfile changed)
       community.docker.docker_image:
         name: custom-alpine-ansible
@@ -20,10 +14,9 @@
           path: "."
           pull: yes
           args:
-            DOCKERFILE_HASH: "{{ dockerfile_hash.stat.checksum }}"
             PASSWORD: "{{ docker_password }}"
         source: build
-      when: dockerfile_hash.stat.checksum is defined
+        force_source: true
 
     - name: Run new containers
       community.docker.docker_container:
