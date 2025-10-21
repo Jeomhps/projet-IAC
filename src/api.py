@@ -6,6 +6,7 @@ import os
 from datetime import datetime, timedelta
 from apscheduler.schedulers.background import BackgroundScheduler
 import atexit
+import crypt   # <--- Add this import!
 
 app = Flask(__name__)
 
@@ -80,7 +81,7 @@ def delete_expired_users():
                         "ansible-playbook",
                         "-i", temp_inventory_path,
                         playbook_path,
-                        "--extra-vars", f"username={username} action=delete"
+                        "--extra-vars", f"username={username} user_action=delete"
                     ], capture_output=True, text=True)
 
                     print(f"[{datetime.now()}] Deleting user {username} from containers: {containers}")
@@ -113,6 +114,9 @@ def reserve_containers():
     count = int(request.args.get("count", 1))
     duration = int(request.args.get("duration", 60))  # Default to 60 minutes
 
+    # Hash the password on the control node
+    hashed_password = crypt.crypt(password, crypt.mksalt(crypt.METHOD_SHA512))
+
     # Check available containers
     cursor.execute("""
         SELECT container_name
@@ -142,7 +146,7 @@ def reserve_containers():
             "ansible-playbook",
             "-i", temp_inventory_path,
             playbook_path,
-            "--extra-vars", f"username={username} password={password} action=create"
+            "--extra-vars", f"username={username} hashed_password='{hashed_password}' user_action=create"
         ], capture_output=True, text=True)
 
         print(f"[{datetime.now()}] Creating user {username} on containers: {reserved}")
@@ -209,7 +213,7 @@ def release_all_containers():
                 "ansible-playbook",
                 "-i", temp_inventory_path,
                 playbook_path,
-                "--extra-vars", f"username={username} action=delete"
+                "--extra-vars", f"username={username} user_action=delete"
             ], capture_output=True, text=True)
 
             print(f"[{datetime.now()}] Deleting user {username} from containers: {containers}")

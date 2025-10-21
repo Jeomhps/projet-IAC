@@ -6,15 +6,16 @@
     - name: Create user
       ansible.builtin.user:
         name: "{{ username }}"
-        password: "{{ password | password_hash('sha512') }}"
+        #password: "{{ password | password_hash('sha512') }}"
+        password: "{{ hashed_password }}"
         shell: /bin/sh
         groups: wheel
         state: present
-      when: action == 'create'
+      when: user_action == 'create'
 
     - name: Delete user
       ansible.builtin.user:
         name: "{{ username }}"
         state: absent
         remove: yes
-      when: action == 'delete'
+      when: user_action == 'delete'
