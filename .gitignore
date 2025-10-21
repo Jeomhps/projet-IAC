@@ -33,4 +33,5 @@ Temporary Items
 venv/
 containers.db
 **/machines.txt
+api.log
 
