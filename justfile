@@ -2,8 +2,11 @@
 API_DIR := "src"
 VENV_DIR := "venv"
 REQUIREMENTS := "requirements.txt"
-PLAYBOOK := "src/create-users.yml"
-PROVISION_PLAYBOOK := "provision.yml"
+
+PROVISION_DIR := "provision"
+PROVISION_PLAYBOOK := "provision/provision.yml"
+UNPROVISION_PLAYBOOK := "provision/unprovision.yml"
+#DOCKERFILE := "{{PROVISION_DIR}}/Dockerfile"
 
 # Install dependencies and set up venv
 setup:
@@ -14,9 +17,16 @@ setup:
 run:
     . {{VENV_DIR}}/bin/activate && python3 {{API_DIR}}/api.py
 
-# Provision containers (using inventory.ini)
+# Provisionning containers
 provision:
     ansible-playbook {{PROVISION_PLAYBOOK}}
+
+unprovision:
+    ansible-playbook {{UNPROVISION_PLAYBOOK}}
+
+reprovision:
+    just unprovision
+    just provision
 
 # Clean up
 clean:
