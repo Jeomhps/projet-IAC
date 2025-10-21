@@ -28,5 +28,10 @@ Icon
 Network Trash Folder
 Temporary Items
 .apdisk
+
+# ---> app related
 venv/
 containers.db
+**/machines.txt
+api.log
+

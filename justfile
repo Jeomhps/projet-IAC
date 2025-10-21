@@ -11,11 +11,17 @@ UNPROVISION_PLAYBOOK := "provision/unprovision.yml"
 # Install dependencies and set up venv
 setup:
     python3 -m venv {{VENV_DIR}}
-    . {{VENV_DIR}}/bin/activate && pip install -r {{REQUIREMENTS}}
+    . {{VENV_DIR}}/bin/activate && \
+    pip install -r {{REQUIREMENTS}}
 
 # Run the API
 run:
-    . {{VENV_DIR}}/bin/activate && python3 {{API_DIR}}/api.py
+    . {{VENV_DIR}}/bin/activate && \
+    python3 {{API_DIR}}/api.py
+
+run-detached:
+    . {{VENV_DIR}}/bin/activate && \
+    nohup python3 {{API_DIR}}/api.py > api.log 2>&1 &
 
 # Provisionning containers
 provision:
@@ -28,6 +34,26 @@ reprovision:
     just unprovision
     just provision
 
+register-machine:
+  . {{VENV_DIR}}/bin/activate && \
+  python3 utils/register_machines.py \
+    provision/machines.txt
+
 # Clean up
 clean:
-    rm -rf {{VENV_DIR}} {{API_DIR}}/containers.db
+    rm -rf {{VENV_DIR}} {{API_DIR}}/containers.db api.log
+
+full-setup:
+    just setup
+    just provision
+    just run-detached
+    sleep 3
+    just register-machine
+
+full-clean:
+    just unprovision
+    pkill -f "{{API_DIR}}/api.py" || true
+    just clean
+
+watch:
+  tail -f api.log

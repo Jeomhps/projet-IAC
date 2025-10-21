@@ -5,6 +5,7 @@
   gather_facts: no
   vars:
     container_count: 10
+    inventory_file: "{{ playbook_dir }}/machines.txt"
   tasks:
     - name: Remove ALL existing containers
       community.docker.docker_container:
@@ -21,3 +22,9 @@
       delegate_to: localhost
       run_once: no
       changed_when: false
+
+    - name: Remove the inventory file
+      ansible.builtin.file:
+        path: "{{ inventory_file }}"
+        state: absent
+      delegate_to: localhost

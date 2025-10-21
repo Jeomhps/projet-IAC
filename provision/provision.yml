@@ -6,6 +6,7 @@
   vars:
     docker_password: "test"
     container_count: 10
+    inventory_file: "{{ playbook_dir }}/machines.txt"
   tasks:
     - name: Build custom Alpine image (if Dockerfile changed)
       community.docker.docker_image:
@@ -39,3 +40,12 @@
       retries: 3
       delay: 2
       until: true
+
+    - name: Generate inventory file (values only)
+      ansible.builtin.copy:
+        content: |
+          {% for i in range(1, container_count + 1) %}
+          alpine-container-{{ i }} localhost 222{{ i }} root test
+          {% endfor %}
+        dest: "{{ inventory_file }}"
+      delegate_to: localhost
