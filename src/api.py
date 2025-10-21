@@ -21,6 +21,7 @@ db_path = os.path.join(script_dir, "containers.db")
 conn = sqlite3.connect(db_path, check_same_thread=False)
 cursor = conn.cursor()
 
+# Create reservations table
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS reservations (
     username TEXT,
@@ -29,9 +30,18 @@ CREATE TABLE IF NOT EXISTS reservations (
     PRIMARY KEY (username, container_name)
 )
 """)
+# Create machines table
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS machines (
+    name TEXT PRIMARY KEY,
+    host TEXT NOT NULL,
+    port INTEGER NOT NULL,
+    user TEXT NOT NULL,
+    password TEXT NOT NULL
+)
+""")
 conn.commit()
 
-CONTAINER_POOL = [f"alpine-{i}" for i in range(1, 11)]
 playbook_path = os.path.join(script_dir, "create-users.yml")
 
 scheduler = BackgroundScheduler()
@@ -44,6 +54,10 @@ def shutdown_scheduler():
 def sha512_hash_openssl(password):
     result = subprocess.run(['openssl', 'passwd', '-6', password], capture_output=True, text=True)
     return result.stdout.strip()
+
+def get_machine_pool():
+    cursor.execute("SELECT name, host, port, user, password FROM machines")
+    return cursor.fetchall()
 
 def delete_expired_users():
     with app.app_context():
@@ -64,10 +78,20 @@ def delete_expired_users():
                 users_to_delete.setdefault(username, []).append(container)
 
             for username, containers in users_to_delete.items():
+                # Get machine info for inventory
+                cursor.execute(
+                    "SELECT name, host, port, user, password FROM machines WHERE name IN ({})".format(
+                        ",".join("?" for _ in containers)
+                    ),
+                    containers,
+                )
+                machines_info = cursor.fetchall()
+
                 with tempfile.NamedTemporaryFile(mode='w', delete=False) as temp_inventory:
-                    for container in containers:
-                        port = 2220 + int(container.split('-')[-1])
-                        temp_inventory.write(f"{container} ansible_host=localhost ansible_port={port} ansible_user=root ansible_password=test\n")
+                    for name, host, port, user, password in machines_info:
+                        temp_inventory.write(
+                            f"{name} ansible_host={host} ansible_port={port} ansible_user={user} ansible_password={password}\n"
+                        )
                     temp_inventory_path = temp_inventory.name
 
                 try:
@@ -78,7 +102,7 @@ def delete_expired_users():
                         "--extra-vars", f"username={username} user_action=delete"
                     ], capture_output=True, text=True)
 
-                    logger.info(f"[{datetime.now()}] Deleting user {username} from containers: {containers}")
+                    logger.info(f"[{datetime.now()}] Deleting user {username} from machines: {containers}")
                     logger.info("Ansible output:\n%s", result.stdout)
                     if result.returncode != 0:
                         logger.error("Ansible error:\n%s", result.stderr)
@@ -98,6 +122,41 @@ def delete_expired_users():
 
 scheduler.add_job(delete_expired_users, 'interval', minutes=1)
 
+@app.route("/machines", methods=["POST"])
+def add_machine():
+    data = request.get_json()
+    name = data["name"]
+    host = data["host"]
+    port = int(data.get("port", 22))
+    user = data.get("user", "root")
+    password = data.get("password", "test")
+    try:
+        cursor.execute(
+            "INSERT INTO machines (name, host, port, user, password) VALUES (?, ?, ?, ?, ?)",
+            (name, host, port, user, password)
+        )
+        conn.commit()
+        logger.info(f"Added machine: {name} ({host}:{port})")
+        return jsonify({"status": "success", "message": f"Machine {name} added."}), 201
+    except sqlite3.IntegrityError:
+        return jsonify({"status": "error", "message": "Machine name already exists."}), 400
+
+@app.route("/machines/<name>", methods=["DELETE"])
+def delete_machine(name):
+    cursor.execute("DELETE FROM machines WHERE name = ?", (name,))
+    conn.commit()
+    logger.info(f"Removed machine: {name}")
+    return jsonify({"status": "success", "message": f"Machine {name} removed."})
+
+@app.route("/machines", methods=["GET"])
+def list_machines():
+    cursor.execute("SELECT name, host, port, user FROM machines")
+    machines = [
+        {"name": name, "host": host, "port": port, "user": user}
+        for name, host, port, user in cursor.fetchall()
+    ]
+    return jsonify({"machines": machines})
+
 @app.route("/reserve")
 def reserve_containers():
     username = request.args.get("username")
@@ -107,24 +166,31 @@ def reserve_containers():
 
     hashed_password = sha512_hash_openssl(password)
 
+    # Get currently reserved machines
     cursor.execute("""
         SELECT container_name
         FROM reservations
         WHERE reserved_until > datetime('now', 'localtime')
     """)
     reserved_containers = [row[0] for row in cursor.fetchall()]
-    available_containers = [c for c in CONTAINER_POOL if c not in reserved_containers]
 
-    if len(available_containers) < count:
-        return jsonify({"error": f"Only {len(available_containers)} containers available"}), 400
+    # Get all machines
+    machines = get_machine_pool()
+    available_machines = [m for m in machines if m[0] not in reserved_containers]
 
-    reserved = available_containers[:count]
+    if len(available_machines) < count:
+        return jsonify({"error": f"Only {len(available_machines)} machines available"}), 400
+
+    reserved = available_machines[:count]
+    reserved_names = [m[0] for m in reserved]
     reserved_until = datetime.now() + timedelta(minutes=duration)
 
+    # Inventory for reserved machines
     with tempfile.NamedTemporaryFile(mode='w', delete=False) as temp_inventory:
-        for container in reserved:
-            port = 2220 + int(container.split('-')[-1])
-            temp_inventory.write(f"{container} ansible_host=localhost ansible_port={port} ansible_user=root ansible_password=test\n")
+        for name, host, port, user, machine_password in reserved:
+            temp_inventory.write(
+                f"{name} ansible_host={host} ansible_port={port} ansible_user={user} ansible_password={machine_password}\n"
+            )
         temp_inventory_path = temp_inventory.name
 
     try:
@@ -135,29 +201,29 @@ def reserve_containers():
             "--extra-vars", f"username={username} hashed_password={hashed_password} user_action=create"
         ], capture_output=True, text=True)
 
-        logger.info(f"[{datetime.now()}] Creating user {username} on containers: {reserved}")
+        logger.info(f"[{datetime.now()}] Creating user {username} on machines: {reserved_names}")
         logger.info("Ansible output:\n%s", result.stdout)
         if result.returncode != 0:
             logger.error("Ansible error:\n%s", result.stderr)
             return jsonify({"error": "Failed to create user", "details": result.stderr}), 500
 
-        for container in reserved:
+        for name in reserved_names:
             cursor.execute("""
                 INSERT OR REPLACE INTO reservations
                 VALUES (?, ?, ?)
-            """, (username, container, reserved_until))
+            """, (username, name, reserved_until))
         conn.commit()
 
         connection_details = [
-            {"container": c, "host": "localhost", "port": 2220 + int(c.split('-')[-1])}
-            for c in reserved
+            {"machine": name, "host": host, "port": port}
+            for name, host, port, user, machine_password in reserved
         ]
 
         return jsonify({
             "status": "success",
             "username": username,
             "password": password,
-            "containers": connection_details,
+            "machines": connection_details,
             "reserved_until": reserved_until.isoformat(),
             "duration_minutes": duration
         })
@@ -171,17 +237,26 @@ def release_all_containers():
     all_reservations = cursor.fetchall()
 
     if not all_reservations:
-        return jsonify({"status": "success", "message": "No containers to release"})
+        return jsonify({"status": "success", "message": "No machines to release"})
 
     users_to_delete = {}
     for username, container in all_reservations:
         users_to_delete.setdefault(username, []).append(container)
 
     for username, containers in users_to_delete.items():
+        # Get machine info for containers
+        cursor.execute(
+            "SELECT name, host, port, user, password FROM machines WHERE name IN ({})".format(
+                ",".join("?" for _ in containers)
+            ),
+            containers,
+        )
+        machines_info = cursor.fetchall()
         with tempfile.NamedTemporaryFile(mode='w', delete=False) as temp_inventory:
-            for container in containers:
-                port = 2220 + int(container.split('-')[-1])
-                temp_inventory.write(f"{container} ansible_host=localhost ansible_port={port} ansible_user=root ansible_password=test\n")
+            for name, host, port, user, machine_password in machines_info:
+                temp_inventory.write(
+                    f"{name} ansible_host={host} ansible_port={port} ansible_user={user} ansible_password={machine_password}\n"
+                )
             temp_inventory_path = temp_inventory.name
 
         try:
@@ -192,7 +267,7 @@ def release_all_containers():
                 "--extra-vars", f"username={username} user_action=delete"
             ], capture_output=True, text=True)
 
-            logger.info(f"[{datetime.now()}] Deleting user {username} from containers: {containers}")
+            logger.info(f"[{datetime.now()}] Deleting user {username} from machines: {containers}")
             logger.info("Ansible output:\n%s", result.stdout)
             if result.returncode != 0:
                 logger.error("Ansible error:\n%s", result.stderr)
@@ -204,7 +279,7 @@ def release_all_containers():
     cursor.execute("DELETE FROM reservations")
     conn.commit()
 
-    return jsonify({"status": "success", "message": "All containers released"})
+    return jsonify({"status": "success", "message": "All machines released"})
 
 @app.route("/available")
 def available_containers():
@@ -214,7 +289,9 @@ def available_containers():
         WHERE reserved_until > datetime('now', 'localtime')
     """)
     reserved_containers = [row[0] for row in cursor.fetchall()]
-    available = [c for c in CONTAINER_POOL if c not in reserved_containers]
+
+    machines = get_machine_pool()
+    available = [m[0] for m in machines if m[0] not in reserved_containers]
     return jsonify({"available": available, "reserved": reserved_containers})
 
 @app.route("/reservations")
@@ -233,7 +310,7 @@ def list_reservations():
     for row in reservations:
         result.append({
             "username": row[0],
-            "container": row[1],
+            "machine": row[1],
             "expiration_time": row[2],
             "time_remaining": row[3]
         })
