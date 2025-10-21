@@ -1,0 +1,23 @@
+---
+- name: Remove ALL existing containers and SSH keys
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  vars:
+    container_count: 10
+  tasks:
+    - name: Remove ALL existing containers
+      community.docker.docker_container:
+        name: "alpine-container-{{ item }}"
+        state: absent
+        force_kill: yes
+      loop: "{{ range(1, container_count + 1) | list }}"
+      ignore_errors: yes
+
+    - name: Remove old SSH host keys from known_hosts (for all containers)
+      ansible.builtin.shell: |
+        ssh-keygen -R "[localhost]:222{{ item }}" 2>/dev/null || true
+      loop: "{{ range(1, container_count + 1) | list }}"
+      delegate_to: localhost
+      run_once: no
+      changed_when: false

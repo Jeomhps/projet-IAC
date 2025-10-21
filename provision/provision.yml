@@ -25,14 +25,6 @@
         source: build
       when: dockerfile_hash.stat.checksum is defined
 
-    - name: Remove ALL existing containers
-      community.docker.docker_container:
-        name: "alpine-container-{{ item }}"
-        state: absent
-        force_kill: yes
-      loop: "{{ range(1, container_count + 1) | list }}"
-      ignore_errors: yes
-
     - name: Run new containers
       community.docker.docker_container:
         name: "alpine-container-{{ item }}"
@@ -43,14 +35,6 @@
           - "222{{ item }}:22"
         recreate: yes
       loop: "{{ range(1, container_count + 1) | list }}"
-
-    - name: Remove old SSH host keys from known_hosts (for all containers)
-      ansible.builtin.shell: |
-        ssh-keygen -R "[localhost]:222{{ item }}" 2>/dev/null || true
-      loop: "{{ range(1, container_count + 1) | list }}"
-      delegate_to: localhost
-      run_once: no
-      changed_when: false
 
     - name: Add new SSH host keys to known_hosts
       ansible.builtin.shell: |
