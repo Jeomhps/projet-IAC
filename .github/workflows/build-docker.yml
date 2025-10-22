@@ -1,5 +1,4 @@
 name: Build and Push Docker Image on Dispatch
-
 on:
   workflow_dispatch:
 
@@ -25,7 +24,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository }}
+          images: ghcr.io/${{ github.repository }}/custom-alpine-ansible
 
       - name: Build and push custom-alpine-ansible
         uses: docker/build-push-action@v5
