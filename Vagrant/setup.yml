@@ -3,11 +3,14 @@
   hosts: all
   become: yes
   tasks:
-    - name: Install Ansible, pip, and python3-docker
+    - name: Install packages
       ansible.builtin.apt:
         name:
           - ansible
-          - python3-docker  # <-- Install via apt instead of pip
+          - python3-docker
+          - python3-venv
+          - curl
+          - just
         state: present
         update_cache: yes
 
@@ -58,47 +61,3 @@
         name: docker
         state: started
         enabled: yes
-
-    - name: Prune Docker containers and networks (no images)
-      community.docker.docker_prune:
-        containers: yes
-        images: no       # Skip pruning images
-        networks: yes
-        volumes: no      # Skip pruning volumes
-        builder_cache: no  # Skip pruning builder cache
-      register: prune_result
-
-    - name: Restart Docker daemon
-      ansible.builtin.service:
-        name: docker
-        state: restarted
-
-    - name: Get Dockerfile hash
-      ansible.builtin.stat:
-        path: /vagrant/Dockerfile
-        checksum_algorithm: sha256
-      register: dockerfile_hash
-
-    - name: Build custom Alpine image (if Dockerfile changed)
-      community.docker.docker_image:
-        name: custom-alpine-ansible
-        build:
-          path: /vagrant
-          pull: yes
-          args:
-            DOCKERFILE_HASH: "{{ dockerfile_hash.stat.checksum }}"
-            PASSWORD: "test"
-        source: build
-      when: dockerfile_hash.stat.checksum is defined
-
-    - name: Run 10 custom Alpine containers with SSH
-      community.docker.docker_container:
-        name: "alpine-container-{{ item }}"
-        image: custom-alpine-ansible
-        state: started
-        detach: yes
-        ports:
-          - "222{{ item }}:22"
-        recreate: yes
-      loop: "{{ range(1, 11) | list }}"
-      #delay: 5
