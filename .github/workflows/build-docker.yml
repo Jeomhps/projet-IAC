@@ -27,10 +27,11 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository }}
 
-      - name: Build and push Docker image
+      - name: Build and push custom-alpine-ansible
         uses: docker/build-push-action@v5
         with:
           context: ./provision
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: ghcr.io/${{ github.repository }}/custom-alpine-ansible:latest
+          build-args: |
+            PASSWORD=test
