@@ -30,6 +30,11 @@
         recreate: yes
       loop: "{{ range(1, container_count + 1) | list }}"
 
+    - name: Wait for 2 seconds before scanning for SSH keys
+      ansible.builtin.command: sleep 2
+      delegate_to: localhost
+      changed_when: false
+
     - name: Add new SSH host keys to known_hosts
       ansible.builtin.shell: |
         ssh-keyscan -p 222{{ item }} localhost >> ~/.ssh/known_hosts 2>/dev/null
