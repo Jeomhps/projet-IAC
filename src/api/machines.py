@@ -1,7 +1,7 @@
 from flask import Blueprint, request, jsonify
 import logging
 from sqlalchemy.exc import IntegrityError
-from db import get_session, Machine
+from common.db import get_session, Machine
 
 logger = logging.getLogger(__name__)
 machines_bp = Blueprint('machines', __name__)
@@ -25,9 +25,8 @@ def add_machine():
         session.commit()
         logger.info(f"Added machine: {name} ({host}:{port})")
         return jsonify({"name": name, "host": host, "port": port, "user": user}), 201
-    except IntegrityError as e:
+    except IntegrityError:
         session.rollback()
-        logger.warning(f"Failed to add machine {name}: {e}")
         return jsonify({"error": "Machine name must be unique."}), 400
     except Exception as e:
         session.rollback()

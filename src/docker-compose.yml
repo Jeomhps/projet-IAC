@@ -6,9 +6,8 @@ services:
       - MARIADB_USER=appuser
       - MARIADB_PASSWORD=apppass
       - MARIADB_ROOT_PASSWORD=rootpass
-    # Publish DB port to host so API (on host net) can use 127.0.0.1:3306
     ports:
-      - "3306:3306"
+      - "127.0.0.1:3306:3306"
     healthcheck:
       test: ["CMD-SHELL", "mariadb-admin ping -h 127.0.0.1 -uroot -p$$MARIADB_ROOT_PASSWORD --silent"]
       interval: 5s
@@ -20,10 +19,9 @@ services:
 
   api:
     build:
-      context: ./
-    # Host networking so SSH to localhost works from inside the container
-    # it's only useful for the demo. In prod this shouldn't be set
-    network_mode: "host"
+      context: .
+      dockerfile: api/Dockerfile
+    network_mode: "host"  # demo: API needs SSH to localhost
     environment:
       - DATABASE_URL=mysql+pymysql://appuser:apppass@127.0.0.1:3306/containers?charset=utf8mb4
       - DB_CONNECT_MAX_RETRIES=120
@@ -31,6 +29,21 @@ services:
     depends_on:
       db:
         condition: service_healthy
+
+  scheduler:
+    build:
+      context: .
+      dockerfile: scheduler/Dockerfile
+    network_mode: "host"  # demo: if it also needs localhost SSH
+    environment:
+      - DATABASE_URL=mysql+pymysql://appuser:apppass@127.0.0.1:3306/containers?charset=utf8mb4
+      - DB_CONNECT_MAX_RETRIES=120
+      - DB_CONNECT_RETRY_SECONDS=1
+    depends_on:
+      db:
+        condition: service_healthy
+    # To run once instead of loop:
+    # command: ["python", "-m", "scheduler.maintenance", "--once"]
 
 volumes:
   db_data:

@@ -4,18 +4,20 @@ import tempfile
 import subprocess
 import os
 import logging
+from pathlib import Path
 from sqlalchemy import and_
-from db import get_session, Machine, Reservation
-from utils import sha512_hash_openssl
+from common.db import get_session, Machine, Reservation
+from common.utils import sha512_hash_openssl
 
 logger = logging.getLogger(__name__)
 reservations_bp = Blueprint('reservations', __name__)
 
+def _playbook_path() -> str:
+    # api/ -> common/playbooks/create-users.yml
+    return str((Path(__file__).resolve().parent.parent / "common" / "playbooks" / "create-users.yml").resolve())
+
 def get_available_machines(session):
     return session.query(Machine).filter(Machine.reserved == False).all()  # noqa: E712
-
-def get_machine_by_id(session, machine_id):
-    return session.query(Machine).filter(Machine.id == machine_id).one_or_none()
 
 @reservations_bp.route("/reserve")
 def reserve_containers():
@@ -27,7 +29,7 @@ def reserve_containers():
         duration = int(request.args.get("duration", 60))
 
         if not username:
-            logger.warning("Username not provided for reservation.")
+            logger.warning("Username is required.")
             return jsonify({"error": "Username is required."}), 400
 
         hashed_password = sha512_hash_openssl(password)
@@ -38,10 +40,9 @@ def reserve_containers():
             return jsonify({"error": f"Only {len(available_machines)} machines available"}), 400
 
         reserved = available_machines[:count]
-        # Use UTC for consistency across environments
         reserved_until = (datetime.utcnow() + timedelta(minutes=duration))
 
-        playbook_path = os.path.join(os.path.dirname(__file__), "create-users.yml")
+        playbook_path = _playbook_path()
         with tempfile.NamedTemporaryFile(mode='w', delete=False) as temp_inventory:
             for m in reserved:
                 temp_inventory.write(
@@ -88,7 +89,6 @@ def reserve_containers():
 def release_all_containers():
     session = get_session()
     try:
-        # Fetch all reservations joined with machines
         res = (
             session.query(Reservation.id, Reservation.machine_id, Machine.name, Reservation.username)
             .join(Machine, Machine.id == Reservation.machine_id)
@@ -98,7 +98,7 @@ def release_all_containers():
             logger.info("No machines to release.")
             return jsonify({"message": "No machines to release."}), 200
 
-        playbook_path = os.path.join(os.path.dirname(__file__), "create-users.yml")
+        playbook_path = _playbook_path()
         users_to_delete = {}
         for res_id, machine_id, machine_name, username in res:
             users_to_delete.setdefault(username, []).append((res_id, machine_id, machine_name))
@@ -127,7 +127,6 @@ def release_all_containers():
                 if os.path.exists(temp_inventory_path):
                     os.unlink(temp_inventory_path)
 
-            # Update machine status and remove reservation
             for res_id, machine_id, _ in tuples:
                 m = session.query(Machine).filter(Machine.id == machine_id).one_or_none()
                 if m:
@@ -169,7 +168,6 @@ def list_reservations():
         now = datetime.utcnow()
         for username, machine, expiration_dt in rows:
             if expiration_dt is None:
-                minutes_remaining = None
                 time_remaining = "unknown"
                 expiration_str = None
             else:
@@ -184,66 +182,5 @@ def list_reservations():
             })
         logger.info(f"Listed {len(result)} reservations.")
         return jsonify({"reservations": result}), 200
-    finally:
-        session.close()
-
-def handle_expired_reservations():
-    session = get_session()
-    try:
-        now = datetime.utcnow()
-        expired = (
-            session.query(
-                Reservation.id,
-                Reservation.machine_id,
-                Reservation.username,
-                Reservation.reserved_until,
-                Machine.name,
-                Machine.host,
-                Machine.port,
-                Machine.user,
-                Machine.password,
-            )
-            .join(Machine, Machine.id == Reservation.machine_id)
-            .filter(and_(Reservation.reserved_until.isnot(None), Reservation.reserved_until <= now))
-            .all()
-        )
-        if not expired:
-            logger.info("No expired reservations to clean up.")
-            return
-
-        playbook_path = os.path.join(os.path.dirname(__file__), "create-users.yml")
-        users_to_delete = {}
-        for res_id, machine_id, username, reserved_until, name, host, port, user, password in expired:
-            users_to_delete.setdefault(username, []).append((res_id, machine_id, name, host, port, user, password))
-
-        for username, tuples in users_to_delete.items():
-            with tempfile.NamedTemporaryFile(mode='w', delete=False) as temp_inventory:
-                for _, machine_id, name, host, port, user, password in tuples:
-                    temp_inventory.write(
-                        f"{name} ansible_host={host} ansible_port={port} ansible_user={user} ansible_password={password}\n"
-                    )
-                temp_inventory_path = temp_inventory.name
-
-            try:
-                subprocess.run([
-                    "ansible-playbook",
-                    "-i", temp_inventory_path,
-                    playbook_path,
-                    "--extra-vars", f"username={username} user_action=delete"
-                ], capture_output=True, text=True)
-            finally:
-                if os.path.exists(temp_inventory_path):
-                    os.unlink(temp_inventory_path)
-
-            for res_id, machine_id, *_ in tuples:
-                m = session.query(Machine).filter(Machine.id == machine_id).one_or_none()
-                if m:
-                    m.reserved = False
-                    m.reserved_by = None
-                    m.reserved_until = None
-                session.query(Reservation).filter(Reservation.id == res_id).delete()
-
-        session.commit()
-        logger.info(f"Cleaned up {len(expired)} expired reservations.")
     finally:
         session.close()
