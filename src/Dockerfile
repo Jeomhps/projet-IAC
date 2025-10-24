@@ -14,6 +14,7 @@ RUN apk add --no-cache \
 # passlib is used in Ansible password hashing scenario if needed
 RUN pip install --no-cache-dir passlib
 
+# To not check the ssh host key, no adding ssh-keygen
 ENV ANSIBLE_HOST_KEY_CHECKING=False
 
 # Set workdir
