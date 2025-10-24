@@ -1,13 +1,17 @@
 FROM python:3.9-alpine
 
-# Install dependencies for Ansible and SSH
+# Install dependencies for Ansible, SSH, and OpenSSL (for password hashing)
 RUN apk add --no-cache \
     build-base \
     openssh-client \
     py3-pip \
     ansible \
-    sshpass
+    sshpass \
+    openssl
 
+# Python dependencies
+# Use PyMySQL for MySQL/MariaDB driver (pure Python, works well on Alpine)
+# passlib is used in Ansible password hashing scenario if needed
 RUN pip install --no-cache-dir passlib
 
 ENV ANSIBLE_HOST_KEY_CHECKING=False
@@ -15,16 +19,15 @@ ENV ANSIBLE_HOST_KEY_CHECKING=False
 # Set workdir
 WORKDIR /app
 
-# Copy requirements and src folder
+# Copy requirements and install
 COPY requirements.txt /app/
-COPY api.py /app/src/
-COPY create-users.yml /app/src/
-
-# Install Python requirements
 RUN pip install --no-cache-dir -r /app/requirements.txt
+
+# Copy application source (entire src)
+COPY . /app/src/
 
 # Expose API port
 EXPOSE 8080
 
-# Run your Flask API
+# Run the Flask API
 CMD ["python", "src/api.py"]

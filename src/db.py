@@ -1,43 +1,76 @@
 import os
-import sqlite3
+from datetime import datetime
+from sqlalchemy import (
+    create_engine,
+    Column,
+    Integer,
+    String,
+    Boolean,
+    DateTime,
+    ForeignKey,
+    event,
+)
+from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 
-DB_NAME = "containers.db"
+# Default to SQLite in the src directory for development
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(SCRIPT_DIR, DB_NAME)
+DEFAULT_SQLITE_PATH = os.path.join(SCRIPT_DIR, "containers.db")
+DATABASE_URL = os.environ.get("DATABASE_URL", f"sqlite:///{DEFAULT_SQLITE_PATH}")
 
-conn = None
-cursor = None
+# Create engine with sensible defaults
+engine_kwargs = {
+    "pool_pre_ping": True,
+    "future": True,
+}
+connect_args = {}
+
+# SQLite-specific adjustments
+if DATABASE_URL.startswith("sqlite:"):
+    # Thread-safety for Flask + background jobs
+    connect_args["check_same_thread"] = False
+    engine_kwargs["connect_args"] = connect_args
+
+engine = create_engine(DATABASE_URL, **engine_kwargs)
+SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False, future=True)
+Base = declarative_base()
+
+# Enable foreign key constraints on SQLite
+if DATABASE_URL.startswith("sqlite:"):
+    @event.listens_for(engine, "connect")
+    def set_sqlite_pragma(dbapi_connection, connection_record):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
+class Machine(Base):
+    __tablename__ = "machines"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(255), unique=True, nullable=False)
+    host = Column(String(255), nullable=False)
+    port = Column(Integer, nullable=False, default=22)
+    user = Column(String(255), nullable=False)
+    password = Column(String(255), nullable=False)
+    reserved = Column(Boolean, nullable=False, default=False)
+    reserved_by = Column(String(255), nullable=True)
+    reserved_until = Column(DateTime, nullable=True)
+
+    reservations = relationship("Reservation", back_populates="machine", cascade="all, delete-orphan")
+
+class Reservation(Base):
+    __tablename__ = "reservations"
+
+    id = Column(Integer, primary_key=True)
+    machine_id = Column(Integer, ForeignKey("machines.id", ondelete="CASCADE"), nullable=False)
+    username = Column(String(255), nullable=False)
+    reserved_until = Column(DateTime, nullable=True)
+
+    machine = relationship("Machine", back_populates="reservations")
 
 def init_db():
-    global conn, cursor
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-    cursor = conn.cursor()
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS machines (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT UNIQUE NOT NULL,
-        host TEXT NOT NULL,
-        port INTEGER NOT NULL,
-        user TEXT NOT NULL,
-        password TEXT NOT NULL,
-        reserved INTEGER NOT NULL DEFAULT 0,
-        reserved_by TEXT,
-        reserved_until TEXT
-    )
-    """)
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS reservations (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        machine_id INTEGER NOT NULL,
-        username TEXT NOT NULL,
-        reserved_until TEXT,
-        FOREIGN KEY (machine_id) REFERENCES machines(id) ON DELETE CASCADE
-    )
-    """)
-    conn.commit()
+    Base.metadata.create_all(bind=engine)
 
-def get_conn_cursor():
-    global conn, cursor
-    if conn is None or cursor is None:
-        init_db()
-    return conn, cursor
+def get_session():
+    # Caller is responsible for closing; prefer:
+    #   with get_session() as session: ...
+    return SessionLocal()
