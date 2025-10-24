@@ -21,29 +21,38 @@ services:
     build:
       context: .
       dockerfile: api/Dockerfile
-    network_mode: "host"  # demo: API needs SSH to localhost
+    network_mode: "host"
     environment:
       - DATABASE_URL=mysql+pymysql://appuser:apppass@127.0.0.1:3306/containers?charset=utf8mb4
       - DB_CONNECT_MAX_RETRIES=120
       - DB_CONNECT_RETRY_SECONDS=1
+      # Optional log tuning:
+      # - GUNICORN_LOGLEVEL=warning
+      # - ENABLE_ACCESS_LOG=false
+      # - LOG_LEVEL=INFO
     depends_on:
       db:
         condition: service_healthy
+    # Give Gunicorn time to drain and exit cleanly
+    stop_grace_period: 10s
 
   scheduler:
     build:
       context: .
       dockerfile: scheduler/Dockerfile
-    network_mode: "host"  # demo: if it also needs localhost SSH
+    network_mode: "host"
     environment:
       - DATABASE_URL=mysql+pymysql://appuser:apppass@127.0.0.1:3306/containers?charset=utf8mb4
       - DB_CONNECT_MAX_RETRIES=120
       - DB_CONNECT_RETRY_SECONDS=1
+      # Optional: how long to wait for advisory lock acquisition
+      # - DB_LOCK_TIMEOUT=2
     depends_on:
       db:
         condition: service_healthy
-    # To run once instead of loop:
-    # command: ["python", "-m", "scheduler.maintenance", "--once"]
+    # Allow current playbook to finish or terminate cleanly before SIGKILL
+    stop_signal: SIGTERM
+    stop_grace_period: 90s
 
 volumes:
   db_data:

@@ -1,6 +1,7 @@
 import argparse
 import logging
-import time
+import signal
+import threading
 from common.db import init_db, get_session
 from common.locks import acquire_distributed_lock
 from common.services.cleanup import run_expired_reservations_cleanup
@@ -9,16 +10,26 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(
 logger = logging.getLogger("maintenance")
 
 LOCK_NAME = "reservation-expiry-cleanup"
+_shutdown = threading.Event()
+
+def _handle_signal(signum, frame):
+    logger.info(f"Received signal {signum}; initiating graceful shutdown")
+    _shutdown.set()
 
 def run_once():
-    init_db()
+    if _shutdown.is_set():
+        return
+    init_db()  # should be quick after first run; if it may block, move it into main() before loop
     session = get_session()
     try:
+        if _shutdown.is_set():
+            return
         try:
             with acquire_distributed_lock(session, LOCK_NAME):
-                run_expired_reservations_cleanup(session)
+                # pass cancel so cleanup can stop ansible promptly
+                run_expired_reservations_cleanup(session, cancel=_shutdown)
         except RuntimeError as e:
-            # Could not acquire lock (another scheduler is running); not an error
+            # lock not acquired (another runner); skip
             logger.info(f"Skip run: {e}")
     finally:
         session.close()
@@ -29,17 +40,20 @@ def main():
     parser.add_argument("--interval", type=int, default=60, help="Loop interval in seconds")
     args = parser.parse_args()
 
+    signal.signal(signal.SIGTERM, _handle_signal)
+    signal.signal(signal.SIGINT, _handle_signal)
+
     if args.once:
         run_once()
         return
 
     logger.info(f"Starting maintenance loop (interval={args.interval}s)")
-    while True:
-        try:
-            run_once()
-        except Exception as e:
-            logger.exception(f"Cleanup error: {e}")
-        time.sleep(args.interval)
+    while not _shutdown.is_set():
+        run_once()
+        # interruptible sleep
+        _shutdown.wait(args.interval)
+
+    logger.info("Scheduler exited gracefully")
 
 if __name__ == "__main__":
     main()

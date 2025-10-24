@@ -6,7 +6,8 @@ RUN apk add --no-cache \
     py3-pip \
     ansible \
     sshpass \
-    openssl
+    openssl \
+    tini
 
 WORKDIR /app
 
@@ -14,12 +15,11 @@ ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app/src
 ENV ANSIBLE_HOST_KEY_CHECKING=False
 
-# Install scheduler Python deps (no Flask)
 COPY scheduler/requirements.txt /app/scheduler-requirements.txt
 RUN pip install --no-cache-dir -r /app/scheduler-requirements.txt
 
-# Copy source (shared common + scheduler)
 COPY common /app/src/common
 COPY scheduler /app/src/scheduler
 
+ENTRYPOINT ["tini", "--"]
 CMD ["python", "-m", "scheduler.maintenance", "--interval", "60"]
