@@ -14,8 +14,12 @@ def run_once():
     init_db()
     session = get_session()
     try:
-        with acquire_distributed_lock(session, LOCK_NAME):
-            run_expired_reservations_cleanup(session)
+        try:
+            with acquire_distributed_lock(session, LOCK_NAME):
+                run_expired_reservations_cleanup(session)
+        except RuntimeError as e:
+            # Could not acquire lock (another scheduler is running); not an error
+            logger.info(f"Skip run: {e}")
     finally:
         session.close()
 
