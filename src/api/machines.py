@@ -23,51 +23,16 @@ def add_machine():
         machine = Machine(name=name, host=host, port=port, user=user, password=password)
         session.add(machine)
         session.commit()
-        logger.info(f"Added machine: {name} ({host}:{port})")
+        # Downgrade to DEBUG to reduce noise; switch LOG_LEVEL=DEBUG if you want to see these
+        logger.debug(f"Added machine: {name} ({host}:{port})")
         return jsonify({"name": name, "host": host, "port": port, "user": user}), 201
     except IntegrityError:
         session.rollback()
+        logger.warning(f"Duplicate machine name attempted: {name}")
         return jsonify({"error": "Machine name must be unique."}), 400
     except Exception as e:
         session.rollback()
-        logger.warning(f"Failed to add machine {name}: {e}")
+        logger.error(f"Failed to add machine {name}: {e}")
         return jsonify({"error": f"Failed to add machine: {e}"}), 400
-    finally:
-        session.close()
-
-@machines_bp.route("/machines/<name>", methods=["DELETE"])
-def delete_machine(name):
-    session = get_session()
-    try:
-        machine = session.query(Machine).filter(Machine.name == name).one_or_none()
-        if not machine:
-            return jsonify({"error": f"Machine '{name}' not found"}), 404
-        session.delete(machine)
-        session.commit()
-        logger.info(f"Removed machine: {name}")
-        return jsonify({"removed": name}), 200
-    finally:
-        session.close()
-
-@machines_bp.route("/machines", methods=["GET"])
-def list_machines():
-    session = get_session()
-    try:
-        machines = session.query(Machine).all()
-        result = []
-        for m in machines:
-            result.append({
-                "id": m.id,
-                "name": m.name,
-                "host": m.host,
-                "port": m.port,
-                "user": m.user,
-                "password": m.password,
-                "reserved": bool(m.reserved),
-                "reserved_by": m.reserved_by,
-                "reserved_until": m.reserved_until.isoformat(timespec="seconds") if m.reserved_until else None,
-            })
-        logger.info(f"Listing {len(result)} machines.")
-        return jsonify({"machines": result}), 200
     finally:
         session.close()
