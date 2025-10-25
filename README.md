@@ -23,11 +23,12 @@ High-level:
 - Demo machines: provisioned by Ansible as separate Docker containers with SSH exposed to host ports (22221, 22222, …). The API/Scheduler reach them via host.docker.internal.
 
 ```mermaid
+```mermaid
 flowchart LR
   Client["Client (Browser SPA + CLI curl)"]
 
   subgraph EDGE["edge network"]
-    RP["Reverse Proxy (Caddy)\n- HTTPS :443\n- Serves SPA\n- Proxies /api → API"]
+    RP["Reverse Proxy (Caddy)\nHTTPS :443\nServes SPA\nProxies /api → API"]
   end
 
   subgraph LAB["lab network"]
@@ -41,11 +42,11 @@ flowchart LR
   API -->|SQL| DB
   SCHED -->|SQL| DB
 
-  Host["Host (Docker Engine)\nDemo 'alpine-container-N'\nports 22221..22230 → 22"]:::host
-  API -. SSH host.docker.internal:222xx .-> Host
-  SCHED -. SSH host.docker.internal:222xx .-> Host
+  Host["Host (Docker Engine)\nDemo 'alpine-container-N'\nports 22221..22230 → 22"]
 
-  classDef host fill:#f6f6f6,stroke:#999,color:#333;
+  API -.->|SSH to host.docker.internal:222xx| Host
+  SCHED -.->|SSH to host.docker.internal:222xx| Host
+```
 ```
 
 Notes:
