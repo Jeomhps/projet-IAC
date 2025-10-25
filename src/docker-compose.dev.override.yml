@@ -1,0 +1,15 @@
+services:
+  api:
+    command: >
+      sh -lc "python -m common.wait_for_db &&
+      exec gunicorn --reload -c /app/src/api/gunicorn.conf.py 'api.api:create_app()'"
+    environment:
+      - PRETTY_JSON=1
+      - WATCHFILES_FORCE_POLLING=true
+    volumes:
+      - ./:/app/src:delegated
+
+  scheduler:
+    volumes:
+      - ./:/app/src:delegated
+    # command: python -m scheduler.maintenance --interval 10
