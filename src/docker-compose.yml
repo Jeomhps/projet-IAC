@@ -32,6 +32,7 @@ services:
       - GUNICORN_LOGLEVEL=info
       - ENABLE_ACCESS_LOG=false
       - LOG_LEVEL=INFO
+      - ANSIBLE_FORKS=5           # Limit Ansible parallelism inside API
     depends_on:
       db:
         condition: service_healthy
@@ -47,11 +48,14 @@ services:
       - DB_CONNECT_MAX_RETRIES=120
       - DB_CONNECT_RETRY_SECONDS=1
       - DB_LOCK_TIMEOUT=0
+      - ANSIBLE_FORKS=5           # Limit Ansible parallelism inside Scheduler
+      - CLEANUP_BATCH_SIZE=20     # Batch size for expired reservation cleanup
     depends_on:
       db:
         condition: service_healthy
     stop_signal: SIGTERM
     stop_grace_period: 90s
+    restart: unless-stopped        # Auto-restart for resilience
 
   reverse-proxy:
     image: caddy:2

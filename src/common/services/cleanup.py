@@ -1,30 +1,38 @@
-import logging
 import os
+import time
+import logging
 import tempfile
 import subprocess
-from pathlib import Path
+from datetime import datetime
+from typing import Optional
 from sqlalchemy import and_
 from sqlalchemy.orm import Session
-from datetime import datetime
-import time
-from typing import Optional
 from common.db import get_session, Machine, Reservation
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-def _playbook_path() -> str:
-    return str((Path(__file__).resolve().parent.parent / "playbooks" / "create-users.yml").resolve())
-
 def _tmp_dir() -> str:
-    # Use shared memory to avoid overlayfs slowness; configurable via TMPDIR
     return os.getenv("TMPDIR", "/dev/shm")
 
-def _run_ansible_with_cancel(cmd: list[str], cancel: Optional[object]) -> tuple[int, str, str]:
+def _playbook_path() -> str:
+    # common/services/ -> common/playbooks/create-users.yml
+    return str((Path(__file__).resolve().parent.parent / "playbooks" / "create-users.yml").resolve())
+
+def _run_ansible_with_cancel(cmd: list[str], cancel: Optional[object], forks: Optional[int] = None) -> tuple[int, str, str]:
     """
-    Run ansible-playbook but allow fast shutdown:
-    - If cancel is set, send SIGTERM then SIGKILL after small grace.
+    Run ansible-playbook with optional forks, and honor a shutdown event.
+    - Do NOT pipe stdout/stderr to avoid blocking on large outputs.
+    - Insert '-f <forks>' if provided.
+    - Return (rc, "", "").
     """
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    if forks:
+        if cmd and os.path.basename(cmd[0]) == "ansible-playbook":
+            cmd = [cmd[0], "-f", str(forks)] + cmd[1:]
+        else:
+            cmd = cmd + ["-f", str(forks)]
+
+    proc = subprocess.Popen(cmd)
     try:
         while proc.poll() is None:
             if cancel is not None and getattr(cancel, "is_set", None) and cancel.is_set():
@@ -42,18 +50,18 @@ def _run_ansible_with_cancel(cmd: list[str], cancel: Optional[object]) -> tuple[
                         pass
                 return (143, "", "terminated by scheduler shutdown")
             time.sleep(0.2)
-        out, err = proc.communicate()
-        return (proc.returncode, out or "", err or "")
+        return (proc.returncode, "", "")
     finally:
-        try:
-            if proc.stdout:
-                proc.stdout.close()
-            if proc.stderr:
-                proc.stderr.close()
-        except Exception:
-            pass
+        # nothing to close when not piping
+        pass
 
 def run_expired_reservations_cleanup(session: Session = None, cancel: Optional[object] = None) -> int:
+    """
+    For each expired username group:
+      - Build a temporary inventory file
+      - Run ansible-playbook to delete the user on those hosts (in batches)
+      - Regardless of ansible rc, clear DB reservations to avoid dangling state
+    """
     owns_session = False
     if session is None:
         session = get_session()
@@ -90,47 +98,54 @@ def run_expired_reservations_cleanup(session: Session = None, cancel: Optional[o
         for res_id, machine_id, username, reserved_until, name, host, port, user, password in expired:
             by_user.setdefault(username, []).append((res_id, machine_id, name, host, port, user, password))
 
-        processed = 0
+        total_cleared = 0
+        batch_size = int(os.getenv("CLEANUP_BATCH_SIZE", "20"))
+        forks = int(os.getenv("ANSIBLE_FORKS", "5"))
+
         for username, tuples in by_user.items():
             if cancel is not None and getattr(cancel, "is_set", None) and cancel.is_set():
                 logger.info("Shutdown requested; aborting cleanup loop")
                 break
 
-            with tempfile.NamedTemporaryFile(mode='w', delete=False, dir=_tmp_dir()) as inv:
-                for _, _, name, host, port, user, password in tuples:
-                    inv.write(f"{name} ansible_host={host} ansible_port={port} ansible_user={user} ansible_password={password}\n")
-                inv_path = inv.name
+            # Process in batches to limit parallel SSH pressure
+            for i in range(0, len(tuples), batch_size):
+                chunk = tuples[i:i + batch_size]
 
-            try:
-                # Reduce SSH/connection waits by constraining ansible timeout
-                rc, out, err = _run_ansible_with_cancel([
-                    "ansible-playbook",
-                    "-i", inv_path,
-                    playbook_path,
-                    "--extra-vars", f"username={username} user_action=delete ansible_ssh_timeout=15",
-                ], cancel)
+                # Build a temp inventory file for this chunk
+                with tempfile.NamedTemporaryFile(mode='w', delete=False, dir=_tmp_dir()) as inv:
+                    for _, _, name, host, port, user, password in chunk:
+                        inv.write(f"{name} ansible_host={host} ansible_port={port} ansible_user={user} ansible_password={password}\n")
+                    inv_path = inv.name
 
-                if rc != 0:
-                    logger.warning(f"Ansible returned rc={rc} for '{username}': {err.strip()}")
+                try:
+                    rc, _, err = _run_ansible_with_cancel([
+                        "ansible-playbook",
+                        "-i", inv_path,
+                        playbook_path,
+                        "--extra-vars", f"username={username} user_action=delete ansible_ssh_timeout=15",
+                    ], cancel, forks=forks)
 
-                # Clear DB state regardless (avoid dangling reservations)
-                for res_id, machine_id, *_ in tuples:
-                    m = session.query(Machine).filter(Machine.id == machine_id).one_or_none()
-                    if m:
-                        m.reserved = False
-                        m.reserved_by = None
-                        m.reserved_until = None
-                    session.query(Reservation).filter(Reservation.id == res_id).delete()
+                    if rc != 0 and rc != 143:
+                        logger.warning(f"Ansible returned rc={rc} for '{username}' batch starting at {i}: {err}")
+                finally:
+                    try:
+                        os.unlink(inv_path)
+                    except Exception:
+                        pass
 
-                session.commit()
-                processed += len(tuples)
-            finally:
-                if os.path.exists(inv_path):
-                    os.unlink(inv_path)
+            # Regardless of ansible result, clear DB reservations to avoid dangling state
+            for res_id, machine_id, *_ in tuples:
+                m = session.query(Machine).filter(Machine.id == machine_id).one_or_none()
+                if m:
+                    m.reserved = False
+                    m.reserved_by = None
+                    m.reserved_until = None
+                session.query(Reservation).filter(Reservation.id == res_id).delete()
+                total_cleared += 1
 
-        if processed:
-            logger.info(f"Cleaned up {processed} expired reservations.")
-        return processed
+        session.commit()
+        logger.info(f"Cleaned up {total_cleared} expired reservations.")
+        return total_cleared
     finally:
         if owns_session:
             session.close()
