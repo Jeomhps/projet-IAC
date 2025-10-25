@@ -1,72 +1,64 @@
-# Container/Machine Manager API
+# Container/Machine Manager (API + Web)
 
-A Docker-first, infrastructure-as-code system to manage a pool of machines/containers. It provides:
-- A Flask API (served by Gunicorn) to register machines, check availability, and handle reservations
+A Docker-first, infrastructure-as-code system to manage a pool of machines/containers.
+
+Includes:
+- Web UI (SPA) served by Caddy, styled with Bootstrap 5
+- Flask API (Gunicorn) to register machines, check availability, handle reservations
 - JWT authentication with role-based access control (admin vs user)
-- A scheduler worker that cleans up expired reservations and performs maintenance
+- Scheduler worker for cleanup/maintenance
 - MariaDB for persistence
-- Ansible playbooks to provision/unprovision the pool
-- A Justfile to orchestrate common workflows (run, run-dev, clean, logs)
-
----
-
-## What changed
-
-Authentication is now implemented:
-- POST /login issues short-lived JWT access tokens
-- Admin-only endpoints:
-  - POST /machines, DELETE /machines/<name>, GET /release_all, and user management (/users)
-- Authenticated (user or admin) endpoints:
-  - GET /machines, GET /available, GET /reservations, GET /reserve
-- Users are stored in the DB; passwords are hashed. Tokens carry roles (["admin"] or []).
-
-By default in dev:
-- A default admin is seeded from environment variables:
-  - ADMIN_DEFAULT_USERNAME (default: admin)
-  - ADMIN_DEFAULT_PASSWORD (default: change-me)
-- TLS is terminated by the reverse proxy using a self-signed certificate. Use -k with curl locally.
-
----
-
-## Requirements
-
-- Docker and Docker Compose plugin (Docker Desktop on macOS/Windows, Docker Engine on Linux)
-- Ansible installed on the host (with the community.docker collection if you target Docker)
-- Python 3.9+ on the host (for helper scripts via Just)
-- just command runner (brew install just or cargo install just)
+- Ansible playbooks to provision/unprovision demo “machines”
+- A Justfile and helper scripts for common workflows
 
 ---
 
 ## Architecture
 
-High level:
-- Reverse proxy: terminates TLS (self-signed in dev), exposes HTTPS on localhost, forwards to the API service
-- API: Flask app served by Gunicorn on HTTP :8080 inside the Docker network; reads/writes reservations and machines in MariaDB
-- Scheduler: background worker; periodically scans DB to expire reservations and perform maintenance
-- DB: MariaDB service; schema initialized by the API on first run
+High-level:
+- Reverse proxy (Caddy): terminates TLS (self-signed in dev), serves the SPA, and proxies browser/API requests under /api to the Flask API.
+- API: Flask app served by Gunicorn on HTTP :8080 inside the Docker network; stores users/machines/reservations in MariaDB; performs SSH/Ansible operations.
+- Scheduler: background worker; expires reservations and performs maintenance.
+- DB: MariaDB service; schema initialized by the API on first run.
+- Demo machines: provisioned by Ansible as separate Docker containers with SSH exposed to host ports (22221, 22222, …). The API/Scheduler reach them via host.docker.internal.
 
 ```mermaid
 flowchart LR
-  Client["Client: curl, utils/register_machines.py"]
+  Client["Client (Browser SPA + CLI curl)"]
 
-  subgraph Docker_Network
-    RP["Reverse Proxy<br/>(HTTPS → HTTP)"]
-    API["Flask API<br/>Gunicorn :8080<br/><i>invokes Ansible</i>"]
-    SCHED["Scheduler Worker<br/><i>invokes Ansible</i>"]
+  subgraph EDGE["edge network"]
+    RP["Reverse Proxy (Caddy)\n- HTTPS :443\n- Serves SPA\n- Proxies /api → API"]
+  end
+
+  subgraph LAB["lab network"]
+    API["Flask API\nGunicorn :8080"]
+    SCHED["Scheduler Worker"]
     DB[(MariaDB)]
-
-    RP -->|HTTP :8080| API
-    API -->|SQL| DB
-    SCHED -->|SQL| DB
   end
 
   Client -->|HTTPS 443| RP
+  RP -->|/api → HTTP :8080| API
+  API -->|SQL| DB
+  SCHED -->|SQL| DB
+
+  Host["Host (Docker Engine)\nDemo 'alpine-container-N'\nports 22221..22230 → 22"]:::host
+  API -. SSH host.docker.internal:222xx .-> Host
+  SCHED -. SSH host.docker.internal:222xx .-> Host
+
+  classDef host fill:#f6f6f6,stroke:#999,color:#333;
 ```
 
 Notes:
-- Code inside containers lives at /app/src.
-- In dev, src/docker-compose.dev.override.yml bind-mounts host ./src to /app/src and runs Gunicorn with --reload for the API.
-- The reverse proxy uses a self-signed cert in dev; use curl -k to skip verification locally.
+- Separation: reverse-proxy attaches to edge and lab; API/DB/Scheduler only on lab.
+- The SPA and API are same-origin (site + /api). This is the standard SPA pattern.
+- macOS: host.docker.internal works by default.
+- Linux: add extra_hosts for API/Scheduler so host.docker.internal resolves to the host gateway.
+
+```yaml
+# In src/docker-compose.yml (Linux only; macOS not required)
+extra_hosts:
+  - "host.docker.internal:host-gateway"
+```
 
 ---
 
@@ -75,86 +67,105 @@ Notes:
 ```
 .
 ├─ Justfile
-├─ requirements.txt                 # Host-side requirements for helper scripts
+├─ requirements.txt
 ├─ provision/
-│  ├─ machines.txt
 │  ├─ provision.yml
-│  └─ unprovision.yml
+│  ├─ unprovision.yml
+│  └─ machines.yml        # generated inventory (host ports for demo)
 └─ src/
    ├─ docker-compose.yml
    ├─ docker-compose.dev.override.yml
    ├─ api/
    │  ├─ Dockerfile
    │  ├─ gunicorn.conf.py
-   │  ├─ api.py                     # Flask app factory and blueprint registration
-   │  ├─ auth.py                    # Auth blueprint (/login, /whoami, /users)
-   │  ├─ machines.py                # Machines endpoints (admin-protected for mutations)
-   │  └─ reservations.py            # Reservation endpoints (auth required; admin for release_all)
+   │  ├─ api.py            # Flask app
+   │  ├─ auth.py           # /login, /whoami, /users
+   │  ├─ machines.py       # manage/register machines
+   │  └─ reservations.py   # reservation endpoints
    ├─ common/
-   │  ├─ db.py                      # SQLAlchemy models and session helpers (User, Machine, Reservation)
-   │  ├─ auth.py                    # JWT utils, decorators, default admin seeding
-   │  ├─ utils.py                   # Helpers (e.g., sha512 hash with openssl)
+   │  ├─ db.py             # SQLAlchemy models & session
+   │  ├─ auth.py           # JWT utils, default admin seeding
    │  └─ playbooks/
    │     └─ create-users.yml
-   └─ reverse-proxy/
-      └─ Caddyfile
+   ├─ reverse-proxy/
+   │  ├─ Caddyfile
+   │  └─ Dockerfile
+   └─ web/
+      ├─ index.html
+      ├─ package.json
+      ├─ tsconfig.json
+      ├─ vite.config.ts
+      └─ src/
+         ├─ main.tsx
+         ├─ App.tsx
+         └─ pages/
+            ├─ Login.tsx
+            ├─ Machines.tsx
+            ├─ Available.tsx
+            ├─ Reservations.tsx
+            └─ Users.tsx
 ```
-
----
-
-## Configuration
-
-Environment variables (not exhaustive):
-- DATABASE_URL: SQLAlchemy DB URL (e.g., mysql+pymysql://appuser:apppass@127.0.0.1:3306/containers?charset=utf8mb4)
-- DB_CONNECT_MAX_RETRIES, DB_CONNECT_RETRY_SECONDS
-- JWT_SECRET: long random string for signing JWTs (required in prod)
-- JWT_EXPIRES_MINUTES: token lifetime (default: 60)
-- ADMIN_DEFAULT_USERNAME: default seeded admin username (default: admin)
-- ADMIN_DEFAULT_PASSWORD: default seeded admin password (default: change-me)
-- LOG_LEVEL, GUNICORN settings, etc.
-
-The API container preloads the app so initialization (including default admin seeding) runs once:
-- WEB_PRELOAD_APP=true in src/docker-compose.yml
 
 ---
 
 ## Getting started
 
-Dev (hot reload):
-```
-just run-dev
-```
-
-Run without dev override:
-```
-just run
+- Build and run:
+```bash
+just run        # or: docker compose -f src/docker-compose.yml up -d --build
 ```
 
-Follow logs:
+- Dev hot-reload (optional):
+```bash
+just run-dev    # uses src/docker-compose.dev.override.yml for API reload
 ```
+
+- Logs:
+```bash
 just logs
 ```
 
-Teardown and cleanup:
-```
+- Teardown and cleanup:
+```bash
 just clean
 ```
+
+Open the site at:
+- https://localhost
+
+Use -k with curl locally (self-signed cert in dev).
+
+---
+
+## Web UI (SPA)
+
+Pages (all under https://localhost):
+- /login: Sign in to get a JWT (stored client-side).
+- /: Dashboard.
+- /machines: List and (admins) register/delete machines.
+- /available: Current pool status (available vs reserved).
+- /reservations: Create reservations; view active ones; admin can “Release All”.
+- /users: Admin-only user management.
+
+The SPA calls the API via same-origin requests to /api/... behind the reverse proxy.
 
 ---
 
 ## Authentication
 
-- POST /login issues a JWT. Include it as Authorization: Bearer <token> for protected endpoints.
+- POST /api/login issues a JWT. Include it as `Authorization: Bearer <token>` for protected endpoints.
 - Roles:
-  - Admin: can manage machines and users; can release_all.
-  - User: can list machines and make reservations.
+  - Admin: manage machines and users; can release_all.
+  - User: list machines and make reservations.
 
 Seeded admin (dev):
-- The API seeds a default admin on first boot using ADMIN_DEFAULT_USERNAME/ADMIN_DEFAULT_PASSWORD.
+- The API seeds a default admin on first boot from env:
+  - `ADMIN_DEFAULT_USERNAME` (default: admin)
+  - `ADMIN_DEFAULT_PASSWORD` (default: change-me)
 
-Example: obtain a token (dev uses self-signed cert; note -k)
+Example: obtain a token (dev uses self-signed cert; note `-k`)
 ```bash
-curl -k -X POST https://localhost/login \
+curl -k -X POST https://localhost/api/login \
   -H "Content-Type: application/json" \
   -d '{"username":"admin","password":"change-me"}'
 # => { "access_token":"<JWT>", "token_type":"Bearer", "expires_in":3600 }
@@ -163,105 +174,86 @@ curl -k -X POST https://localhost/login \
 Check token:
 ```bash
 TOKEN=<paste token>
-curl -k -H "Authorization: Bearer $TOKEN" https://localhost/whoami
+curl -k -H "Authorization: Bearer $TOKEN" https://localhost/api/whoami
 ```
 
 ---
 
-## API
+## API (through the reverse proxy)
 
-Base URL (through the reverse proxy): https://localhost
+Base: https://localhost/api
 
-Use -k with curl locally because the example uses a self-signed certificate.
-
-### Health
-- GET /healthz → {"status":"ok"}
+- Health
 ```bash
-curl -k https://localhost/healthz
+curl -k https://localhost/api/healthz
+# {"status":"ok"}
 ```
 
-### Auth
-- POST /login → obtain JWT
-  - Body: {"username":"...", "password":"..."}
-- GET /whoami → verify token
+- Auth
 ```bash
-curl -k -X POST https://localhost/login \
+curl -k -X POST https://localhost/api/login \
   -H "Content-Type: application/json" \
   -d '{"username":"admin","password":"change-me"}'
 
 TOKEN=<JWT>
-curl -k -H "Authorization: Bearer $TOKEN" https://localhost/whoami
+curl -k -H "Authorization: Bearer $TOKEN" https://localhost/api/whoami
 ```
 
-- Admin user management (admin only)
-  - POST /users → create user
-    - Body: {"username":"u","password":"p","is_admin":false}
-  - GET /users → list users
-  - DELETE /users/<username> → delete user
-
+- Users (admin)
 ```bash
-# Create a non-admin user
-curl -k -X POST https://localhost/users \
+# Create
+curl -k -X POST https://localhost/api/users \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"username":"alice","password":"s3cret","is_admin":false}'
-```
 
-### Machines
-- POST /machines (admin) → register a machine
-```bash
-curl -k -X POST https://localhost/machines \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"name":"alpine-1","host":"localhost","port":2221,"user":"root","password":"test"}'
-```
+# List
+curl -k -H "Authorization: Bearer $TOKEN" https://localhost/api/users
 
-- GET /machines (auth) → list machines
-```bash
-curl -k -H "Authorization: Bearer $TOKEN" https://localhost/machines
-```
-
-- DELETE /machines/<name> (admin) → remove a machine
-```bash
-curl -k -X DELETE https://localhost/machines/alpine-1 \
+# Delete
+curl -k -X DELETE https://localhost/api/users/alice \
   -H "Authorization: Bearer $TOKEN"
 ```
 
-### Reservations
-- GET /reserve (auth) → reserve N machines for a user
-  - Query params:
-    - username: logical username to create on target machines (defaults to the authenticated API user)
-    - reservation_password: password to set on target machines (hashed with SHA-512 for Ansible) [alias: password]
-    - count: number of machines (default 1)
-    - duration: minutes (default 60)
-
+- Machines
 ```bash
+# Register (admin)
+curl -k -X POST https://localhost/api/machines \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"alpine-1","host":"host.docker.internal","port":22221,"user":"root","password":"test"}'
+
+# List (auth)
+curl -k -H "Authorization: Bearer $TOKEN" https://localhost/api/machines
+
+# Delete (admin)
+curl -k -X DELETE https://localhost/api/machines/alpine-1 \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+- Reservations
+```bash
+# Reserve N machines for a duration (minutes)
 curl -k -H "Authorization: Bearer $TOKEN" \
-  "https://localhost/reserve?count=2&duration=60&reservation_password=test"
+  "https://localhost/api/reserve?count=2&duration=60&reservation_password=test"
+
+# Release all (admin)
+curl -k -H "Authorization: Bearer $TOKEN" https://localhost/api/release_all
+
+# Pool status (auth)
+curl -k -H "Authorization: Bearer $TOKEN" https://localhost/api/available
+
+# Active reservations (auth)
+curl -k -H "Authorization: Bearer $TOKEN" https://localhost/api/reservations
 ```
 
-- GET /release_all (admin) → release all machines and delete users
-```bash
-curl -k -H "Authorization: Bearer $TOKEN" https://localhost/release_all
-```
-
-- GET /available (auth) → current available/reserved pool status
-```bash
-curl -k -H "Authorization: Bearer $TOKEN" https://localhost/available
-```
-
-- GET /reservations (auth) → list active reservations and time remaining
-```bash
-curl -k -H "Authorization: Bearer $TOKEN" https://localhost/reservations
-```
-
-In production, configure the reverse proxy with a trusted certificate and remove -k.
+Production note: configure a trusted certificate and remove `-k`.
 
 ---
 
 ## Registering machines (admin)
 
-The helper script logs in with the seeded admin and registers machines from YAML.
+Helper script: reads YAML and registers machines via the API.
 
 Usage:
 ```bash
@@ -272,33 +264,66 @@ YAML format:
 ```yaml
 machines:
   - name: alpine-1
-    host: localhost
-    port: 2221
+    host: localhost           # host.docker.internal is also fine
+    port: 22221
     user: root
     password: test
   - name: alpine-2
     host: localhost
-    port: 2222
+    port: 22222
     user: root
     password: test
 ```
 
 The script:
-- Calls POST /login using ADMIN_DEFAULT_USERNAME/ADMIN_DEFAULT_PASSWORD from the environment
-- Uses the returned JWT to call POST /machines for each entry
+- Logs in via POST /api/login using `ADMIN_DEFAULT_USERNAME`/`ADMIN_DEFAULT_PASSWORD`
+- Posts each machine to POST /api/machines
+- Rewrites `localhost`/`127.0.0.1` → `host.docker.internal` by default so API/Scheduler (in Docker) can reach the host-published ports.
 
 Environment defaults (override as needed):
-- API_BASE=https://localhost
-- ADMIN_DEFAULT_USERNAME=admin
-- ADMIN_DEFAULT_PASSWORD=change-me
-- VERIFY_TLS=false (set true if you have a trusted cert)
+```bash
+# SPA/API base and prefix
+API_BASE=https://localhost
+API_PREFIX=/api
+# Admin creds
+ADMIN_DEFAULT_USERNAME=admin
+ADMIN_DEFAULT_PASSWORD=change-me
+# Local TLS (self-signed)
+VERIFY_TLS=false
+# Host rewrite behavior
+REWRITE_LOCALHOST=true
+DOCKER_HOST_GATEWAY_NAME=host.docker.internal
+```
+
+macOS vs Linux:
+- macOS: `host.docker.internal` works out of the box (no extra config).
+- Linux: ensure API/Scheduler include:
+```yaml
+extra_hosts:
+  - "host.docker.internal:host-gateway"
+```
+
+---
+
+## Configuration
+
+Key environment variables (not exhaustive):
+- DATABASE_URL (e.g., `mysql+pymysql://appuser:apppass@db:3306/containers?charset=utf8mb4`)
+- DB_CONNECT_MAX_RETRIES, DB_CONNECT_RETRY_SECONDS
+- JWT_SECRET (required in prod), JWT_EXPIRES_MINUTES
+- ADMIN_DEFAULT_USERNAME, ADMIN_DEFAULT_PASSWORD
+- LOG_LEVEL, Gunicorn worker/settings
+- WEB_PRELOAD_APP=true (preload seeding on boot)
 
 ---
 
 ## Production notes
 
-- Always set a strong JWT_SECRET and rotate periodically.
-- Keep tokens short-lived (e.g., 15–60 minutes); consider refresh tokens if needed.
-- Enforce HTTPS; remove -k from curl examples and enable TLS verification.
-- Restrict admin credentials and consider 2FA for admin accounts if you build a UI.
-- Rate-limit /login and audit sensitive admin actions.
+- Only expose the reverse proxy (443). Keep API/Scheduler/DB on internal networks.
+- Enforce HTTPS with trusted certs; remove `-k` in examples.
+- Keep JWTs short-lived; consider refresh tokens in HttpOnly cookies if needed.
+- Lock down CORS to your site’s origin if you split domains.
+- Rate-limit /api/login and audit admin actions.
+- Use strong `JWT_SECRET`; rotate periodically.
+
+---
