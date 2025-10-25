@@ -44,37 +44,42 @@ docker-reset:
 docker-reset-dev:
     docker compose -f {{COMPOSE_FILE}} -f {{DEV_OVERRIDE}} down -v
 
-# Provision containers with Ansible
-provision:
-    ansible-playbook provision/provision.yml
+# Provision containers with Ansible (set count and password)
+# Usage:
+#   just provision                # defaults to 10 containers, password "test"
+#   just provision 25             # 25 containers, password "test"
+#   just provision 40 mypass      # 40 containers, password "mypass"
+provision count="10" password="test":
+    ansible-playbook provision/provision.yml --extra-vars "container_count={{count}} docker_password={{password}}"
 
-# Unprovision containers with Ansible
+# Unprovision containers: remove only those listed in provision/machines.yml
 unprovision:
     ansible-playbook provision/unprovision.yml
 
-reprovision:
+# Reprovision with a given count/password
+reprovision count="10" password="test":
     just unprovision
-    just provision
+    just provision {{count}} {{password}}
 
-# Register machines into the API from provision/machines.txt
+# Register machines into the API from provision/machines.yml
 register-machine:
-    PYTHONPATH={{SRC_DIR}} {{PY}} utils/register_machines.py provision/machines.txt
+    PYTHONPATH={{SRC_DIR}} {{PY}} utils/register_machines.py provision/machines.yml
 
 # One-shot: setup, provision, bring up Docker (no override), register
-run:
+run count="10" password="test":
     just setup
-    just provision
+    just provision {{count}} {{password}}
     just docker-up
     just register-machine
 
 # One-shot: setup, provision, bring up Docker with dev override, register
-run-dev:
+run-dev count="10" password="test":
     just setup
-    just provision
+    just provision {{count}} {{password}}
     just docker-up-dev
     just register-machine
 
-# Renamed clean: teardown and cleanup
+# Teardown and cleanup
 clean:
     just unprovision || true
     just docker-reset || true

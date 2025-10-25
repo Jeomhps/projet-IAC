@@ -1,30 +1,51 @@
 ---
-- name: Remove ALL existing containers and SSH keys
+- name: Remove existing containers listed in machines.yml
   hosts: localhost
   connection: local
   gather_facts: no
   vars:
-    container_count: 10
-    inventory_file: "{{ playbook_dir }}/machines.txt"
+    inventory_yaml: "{{ playbook_dir }}/machines.yml"
+    remove_inventory: false
   tasks:
-    - name: Remove ALL existing containers
+    - name: Check if inventory YAML exists
+      ansible.builtin.stat:
+        path: "{{ inventory_yaml }}"
+      register: inv_stat
+
+    - name: Load machines from YAML
+      ansible.builtin.set_fact:
+        machines_obj: "{{ lookup('ansible.builtin.file', inventory_yaml) | from_yaml }}"
+      when: inv_stat.stat.exists
+
+    - name: Normalize machines list
+      ansible.builtin.set_fact:
+        machines: "{{ (machines_obj.machines if (machines_obj is mapping and 'machines' in machines_obj) else machines_obj) | list }}"
+      when: inv_stat.stat.exists
+
+    - name: No inventory found or empty — nothing to unprovision
+      ansible.builtin.debug:
+        msg: "No machines found in {{ inventory_yaml }}. Nothing to unprovision."
+      when: not inv_stat.stat.exists or (machines | default([]) | length) == 0
+
+    - name: Remove containers listed in machines.yml
       community.docker.docker_container:
-        name: "alpine-container-{{ item }}"
+        name: "{{ item.name }}"
         state: absent
         force_kill: yes
-      loop: "{{ range(1, container_count + 1) | list }}"
+      loop: "{{ machines | default([]) }}"
+      loop_control:
+        label: "{{ item.name }}"
       ignore_errors: yes
+      when: inv_stat.stat.exists and (machines | length) > 0
 
-    - name: Remove old SSH host keys from known_hosts (for all containers)
-      ansible.builtin.shell: |
-        ssh-keygen -R "[localhost]:222{{ item }}" 2>/dev/null || true
-      loop: "{{ range(1, container_count + 1) | list }}"
-      delegate_to: localhost
-      run_once: no
+    - name: Remove SSH host keys for each machine
+      ansible.builtin.shell: >
+        ssh-keygen -R "[{{ item.host }}]:{{ item.port }}" 2>/dev/null || true
+      loop: "{{ machines | default([]) }}"
       changed_when: false
+      when: inv_stat.stat.exists and (machines | length) > 0
 
-    - name: Remove the inventory file
+    - name: remove the inventory file
       ansible.builtin.file:
-        path: "{{ inventory_file }}"
+        path: "{{ inventory_yaml }}"
         state: absent
-      delegate_to: localhost

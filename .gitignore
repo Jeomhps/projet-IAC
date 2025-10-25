@@ -33,6 +33,7 @@ Temporary Items
 venv/
 containers.db
 **/machines.txt
+**/machines.yml
 api.log
 
 # ---> python
