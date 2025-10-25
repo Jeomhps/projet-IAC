@@ -22,4 +22,5 @@ COPY common /app/src/common
 COPY scheduler /app/src/scheduler
 
 ENTRYPOINT ["tini", "--"]
-CMD ["python", "-m", "scheduler.maintenance", "--interval", "60"]
+# Wait for DB once, then run the scheduler
+CMD ["sh", "-c", "python -m common.wait_for_db && exec python -m scheduler.maintenance --interval 60"]

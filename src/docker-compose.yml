@@ -26,15 +26,16 @@ services:
       - DATABASE_URL=mysql+pymysql://appuser:apppass@127.0.0.1:3306/containers?charset=utf8mb4
       - DB_CONNECT_MAX_RETRIES=120
       - DB_CONNECT_RETRY_SECONDS=1
-      # Optional log tuning:
-      # - GUNICORN_LOGLEVEL=warning
-      # - ENABLE_ACCESS_LOG=false
-      # - LOG_LEVEL=INFO
+      - WORKER_CLASS=sync
+      - WEB_CONCURRENCY=4
+      - GTHREADS=1
+      - GUNICORN_LOGLEVEL=info
+      - ENABLE_ACCESS_LOG=false
+      - LOG_LEVEL=INFO
     depends_on:
       db:
         condition: service_healthy
-    # Give Gunicorn time to drain and exit cleanly
-    stop_grace_period: 10s
+    stop_grace_period: 30s
 
   scheduler:
     build:
@@ -45,14 +46,25 @@ services:
       - DATABASE_URL=mysql+pymysql://appuser:apppass@127.0.0.1:3306/containers?charset=utf8mb4
       - DB_CONNECT_MAX_RETRIES=120
       - DB_CONNECT_RETRY_SECONDS=1
-      # Optional: how long to wait for advisory lock acquisition
-      # - DB_LOCK_TIMEOUT=2
+      - DB_LOCK_TIMEOUT=0
     depends_on:
       db:
         condition: service_healthy
-    # Allow current playbook to finish or terminate cleanly before SIGKILL
     stop_signal: SIGTERM
     stop_grace_period: 90s
 
+  reverse-proxy:
+    image: caddy:2
+    network_mode: "host"
+    environment:
+      - DOMAIN=example.com         # change to your domain
+      - EMAIL=you@example.com      # change to your email for Let's Encrypt
+    volumes:
+      - ./reverse-proxy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
 volumes:
   db_data:
+  caddy_data:
+  caddy_config:

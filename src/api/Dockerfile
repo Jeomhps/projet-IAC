@@ -25,4 +25,5 @@ COPY api /app/src/api
 EXPOSE 8080
 
 ENTRYPOINT ["tini", "--"]
-CMD ["gunicorn", "-c", "/app/src/api/gunicorn.conf.py", "api.api:create_app()"]
+# Wait for DB once, then start Gunicorn
+CMD ["sh", "-c", "python -m common.wait_for_db && exec gunicorn -c /app/src/api/gunicorn.conf.py 'api.api:create_app()'"]
