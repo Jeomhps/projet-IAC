@@ -6,6 +6,7 @@ from typing import Callable, Optional, List
 import jwt
 from flask import request, jsonify, g
 from werkzeug.security import check_password_hash, generate_password_hash
+from sqlalchemy.exc import IntegrityError
 
 from common.db import get_session, User
 
@@ -105,29 +106,42 @@ def verify_user_credentials(session, username: str, password: str) -> Optional[U
     return user
 
 def create_user(session, username: str, password: str, is_admin: bool = False) -> User:
-    if get_user_by_username(session, username):
+    """
+    Create a user. Safe to call concurrently: if a duplicate is inserted by another
+    worker between check and commit, we catch IntegrityError and surface a ValueError.
+    """
+    existing = get_user_by_username(session, username)
+    if existing:
         raise ValueError("User already exists")
+
     user = User(
         username=username,
         password_hash=generate_password_hash(password),
         is_admin=is_admin,
     )
     session.add(user)
-    session.commit()
+    try:
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        # Another process inserted the same username concurrently.
+        raise ValueError("User already exists")
     return user
 
 def ensure_default_admin() -> None:
     """
-    Create a default admin user if ADMIN_DEFAULT_USERNAME and ADMIN_DEFAULT_PASSWORD are set
-    and the user does not already exist. This runs at app startup.
+    Create a default admin user if ADMIN_DEFAULT_USERNAME and ADMIN_DEFAULT_PASSWORD are set.
+    Concurrency-safe: ignores duplicate insert races.
     """
     if not ADMIN_DEFAULT_USERNAME or not ADMIN_DEFAULT_PASSWORD:
         return
     session = get_session()
     try:
-        existing = get_user_by_username(session, ADMIN_DEFAULT_USERNAME)
-        if existing:
-            return
-        create_user(session, ADMIN_DEFAULT_USERNAME, ADMIN_DEFAULT_PASSWORD, is_admin=True)
+        # Attempt to create; if it already exists (or a race happens), ignore.
+        try:
+            create_user(session, ADMIN_DEFAULT_USERNAME, ADMIN_DEFAULT_PASSWORD, is_admin=True)
+        except ValueError:
+            # Already exists or concurrent insert won the race
+            pass
     finally:
         session.close()
