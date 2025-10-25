@@ -12,7 +12,18 @@ except Exception:
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-API_URL = os.getenv("API_URL", "https://localhost/machines")
+# Designed to match the Docker/dev setup you’re running:
+# - API_BASE defaults to https://localhost (reverse-proxy)
+# - Admin creds come from the same env you used to seed the default admin
+# - TLS verification disabled by default for the self-signed dev cert
+API_BASE = os.getenv("API_BASE", "https://localhost").rstrip("/")
+ADMIN_USER = os.getenv("ADMIN_DEFAULT_USERNAME", "admin")
+ADMIN_PASS = os.getenv("ADMIN_DEFAULT_PASSWORD", "change-me")
+VERIFY_TLS = os.getenv("VERIFY_TLS", "").lower() in ("1", "true", "yes")
+
+LOGIN_URL = f"{API_BASE}/login"
+MACHINES_URL = f"{API_BASE}/machines"
+
 
 def _parse_txt(path: str) -> List[Dict[str, Any]]:
     items = []
@@ -28,6 +39,7 @@ def _parse_txt(path: str) -> List[Dict[str, Any]]:
             name, host, port, user, password = parts
             items.append({"name": name, "host": host, "port": int(port), "user": user, "password": password})
     return items
+
 
 def _parse_csv(path: str) -> List[Dict[str, Any]]:
     items = []
@@ -61,6 +73,7 @@ def _parse_csv(path: str) -> List[Dict[str, Any]]:
             items.append({"name": name, "host": host, "port": int(port), "user": user, "password": password})
     return items
 
+
 def _parse_yaml(path: str) -> List[Dict[str, Any]]:
     if yaml is None:
         raise RuntimeError("PyYAML is not installed. Please add 'PyYAML' to requirements.txt or use .csv/.txt.")
@@ -85,6 +98,7 @@ def _parse_yaml(path: str) -> List[Dict[str, Any]]:
         items.append({"name": name, "host": host, "port": int(port), "user": user, "password": password})
     return items
 
+
 def parse_machines_file(path: str) -> List[Dict[str, Any]]:
     ext = os.path.splitext(path)[1].lower()
     if ext in (".yml", ".yaml"):
@@ -92,6 +106,31 @@ def parse_machines_file(path: str) -> List[Dict[str, Any]]:
     if ext == ".csv":
         return _parse_csv(path)
     return _parse_txt(path)
+
+
+def login_for_token(user: str, password: str) -> str:
+    try:
+        resp = requests.post(
+            LOGIN_URL,
+            json={"username": user, "password": password},
+            verify=VERIFY_TLS
+        )
+    except requests.RequestException as e:
+        print(f"Login request failed: {e}")
+        return ""
+    if resp.status_code != 200:
+        print(f"Login failed ({resp.status_code}): {resp.text}")
+        return ""
+    try:
+        data = resp.json()
+    except ValueError:
+        print("Login response was not JSON")
+        return ""
+    token = data.get("access_token", "")
+    if not token:
+        print("No access_token in login response")
+    return token
+
 
 def main(machines_file: str) -> None:
     machines_path = os.path.abspath(machines_file)
@@ -109,15 +148,33 @@ def main(machines_file: str) -> None:
         print("No machines to register.")
         return
 
+    # Auto-login using the admin seeded in Docker env
+    token = login_for_token(ADMIN_USER, ADMIN_PASS)
+    if not token:
+        print("Cannot proceed without an admin token. Check ADMIN_DEFAULT_USERNAME/ADMIN_DEFAULT_PASSWORD and API_BASE.")
+        sys.exit(1)
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+
+    any_failed = False
     for m in machines:
         try:
-            resp = requests.post(API_URL, json=m, verify=False)
+            resp = requests.post(MACHINES_URL, json=m, headers=headers, verify=VERIFY_TLS)
             if resp.status_code == 201:
                 print(f"Added {m['name']}")
             else:
-                print(f"Failed to add {m['name']}: {resp.text}")
+                any_failed = True
+                print(f"Failed to add {m['name']}: {resp.status_code} {resp.text}")
         except requests.RequestException as e:
+            any_failed = True
             print(f"Failed to add {m['name']}: {e}")
+
+    if any_failed:
+        sys.exit(2)
+
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
