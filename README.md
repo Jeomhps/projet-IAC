@@ -1,208 +1,225 @@
 # Projet-IAC
-# Container/Machine Manager API
+## Container/Machine Manager API
 
-A dynamic container/machine assignment system using Docker, Ansible, and Flask.  
-Supports dynamic pool management, automatic user provisioning/deprovisioning, and real-time API monitoring.
+A Docker-first, infrastructure-as-code system to manage a pool of machines/containers. It provides:
+- A Flask API (served by Gunicorn) to register machines, check availability, and handle reservations
+- A scheduler worker that cleans up expired reservations and performs maintenance
+- MariaDB for persistence
+- Ansible playbooks to provision/unprovision the pool
+- A Justfile to orchestrate common workflows (run, run-dev, clean, logs)
 
----
-
-## **Requirements**
-- **Docker**: Installed and running on the host.
-- **Ansible**: Installed with the `community.docker` collection.
-- **Python 3.9+**: With `venv` support.
-- **Just**: Command runner (`cargo install just` or `brew install just`).
+Authentication is not implemented yet.
 
 ---
 
-## **Installation & Setup**
+## Requirements
+- Docker and Docker Compose plugin (Docker Desktop on macOS/Windows, Docker Engine on Linux)
+- Ansible installed on the host (with the community.docker collection if you target Docker)
+- Python 3.9+ on the host (for helper scripts via Just)
+- just command runner (brew install just or cargo install just)
 
-1. **Install dependencies and set up the virtual environment**:
-   ```bash
-   just setup
-   ```
+---
 
-2. **Provision Docker containers or machines** (using Ansible):
-   ```bash
-   just provision
-   ```
+## Quick start
 
-3. **Start the API (detached/background)**:
-   ```bash
-   just run-detached
-   ```
-
-4. **Register provisioned machines with the API**:
-   ```bash
-   just register-machine
-   ```
-
-**Or run everything with one command:**
+Run with a stable image (no hot reload):
 ```bash
-just full-setup
+just run
 ```
 
----
-
-## **Usage**
-
-### **Run the API**
+Run in development with hot reload (bind-mounts your src/ and uses gunicorn --reload):
 ```bash
-just run          # Foreground
-just run-detached # Background (logs to api.log)
+just run-dev
 ```
 
-### **Watch API Logs**
+Stop and clean everything (unprovision, reset DB volumes, remove venv):
 ```bash
-tail -f api.log
+just clean
 ```
 
----
-
-## **API Endpoints (Dynamic Pool)**
-
-| Endpoint         | Method | Description                         | Example |
-|------------------|--------|-------------------------------------|---------|
-| `/machines`      | POST   | Add a machine to the pool           | `curl -X POST -H "Content-Type: application/json" -d '{"name":"alpine-1","host":"localhost","port":2221,"user":"root","password":"test"}' http://localhost:8080/machines` |
-| `/machines`      | GET    | List all machines in the pool        | `curl http://localhost:8080/machines` |
-| `/machines/<name>` | DELETE | Remove a machine from the pool     | `curl -X DELETE http://localhost:8080/machines/alpine-1` |
-| `/reserve`       | GET    | Reserve machines for a user         | `curl "http://localhost:8080/reserve?username=alice&password=test&count=2&duration=60"` |
-| `/release_all`   | GET    | Release all machines and delete users | `curl "http://localhost:8080/release_all"` |
-| `/available`     | GET    | List available and reserved machines | `curl "http://localhost:8080/available"` |
-| `/reservations`  | GET    | List all active reservations with expiration times | `curl "http://localhost:8080/reservations"` |
-
----
-
-### **Reserve Machines**
+After startup, test through the reverse proxy (self-signed cert in dev; use -k to ignore TLS verification):
 ```bash
-# Reserve 2 machines for 60 minutes (default)
-curl "http://localhost:8080/reserve?username=alice&password=test&count=2"
-
-# Reserve 1 machine for 5 minutes (for testing)
-curl "http://localhost:8080/reserve?username=test&password=test&count=1&duration=5"
+curl -k https://localhost/healthz
+curl -k https://localhost/available
 ```
 
-**Parameters**:
-- `username`: User to create (required)
-- `password`: Password for the user (default: "test")
-- `count`: Number of machines to reserve (default: 1)
-- `duration`: Reservation duration in minutes (default: 60)
+In production, you should use a reverse proxy with a trusted (verified) certificate; -k is only for the local self-signed example.
 
 ---
 
-### **Check Available Machines**
+## Commands (from Justfile)
+
+- run: setup venv + provision + docker-up + register-machine
+- run-dev: setup venv + provision + docker-up-dev + register-machine (hot reload)
+- docker-up: docker compose up -d (base compose only)
+- docker-up-dev: docker compose up -d with src/docker-compose.dev.override.yml
+- logs / logs-dev: follow logs for api, scheduler
+- docker-down / docker-down-dev: stop the stack
+- docker-reset / docker-reset-dev: stop and delete volumes (fresh DB)
+- provision / unprovision / reprovision: run Ansible playbooks
+- register-machine: POST all entries from provision/machines.txt to the API
+- clean: unprovision, reset volumes (both variants), remove venv
+
+The Justfile uses a local Python venv to run the helper script.
+
+---
+
+## Architecture
+
+High level:
+- Reverse proxy: terminates TLS (self-signed in dev), exposes HTTPS on localhost, forwards to the API service
+- API: Flask app served by Gunicorn on HTTP :8080 inside the Docker network; reads/writes reservations and machines in MariaDB
+- Scheduler: background worker; periodically scans DB to expire reservations and perform maintenance
+- DB: MariaDB service; schema initialized by the API on first run
+
+```mermaid
+flowchart LR
+    Client[(Client: curl, utils/register_machines.py)]
+    subgraph Docker_Network
+        RP[Reverse Proxy\n(HTTPS -> HTTP)]
+        API[Flask API\nGunicorn :8080]
+        SCHED[Scheduler Worker]
+        DB[(MariaDB)]
+        RP -->|HTTP :8080| API
+        API -- SQL --> DB
+        SCHED -- SQL --> DB
+    end
+    Client -->|HTTPS :443 (localhost)| RP
+```
+
+Notes:
+- Code inside containers lives at /app/src.
+- In dev, src/docker-compose.dev.override.yml bind-mounts host ./src to /app/src and runs Gunicorn with --reload for the API.
+
+---
+
+## Configuration
+
+Most configuration lives in src/docker-compose.yml (and the dev override). Common variables:
+- DATABASE_URL: e.g., mysql+pymysql://appuser:apppass@db:3306/containers?charset=utf8mb4
+- Gunicorn tuning via env (optional): WORKER_CLASS, WEB_CONCURRENCY, GTHREADS, GUNICORN_LOGLEVEL
+- PRETTY_JSON=1 (optional) to pretty-print JSON responses in dev
+
+Compose can load a .env file located in src/ for environment values.
+
+---
+
+## API endpoints
+
+Base URL (through the reverse proxy): https://localhost
+
+Use -k with curl locally because the example uses a self-signed certificate.
+
+- GET /healthz → {"status":"ok"}
+  ```bash
+  curl -k https://localhost/healthz
+  ```
+- GET /available → current available/reserved pool status
+  ```bash
+  curl -k https://localhost/available
+  ```
+- POST /machines → register a machine
+  ```bash
+  curl -k -X POST -H "Content-Type: application/json" \
+    -d '{"name":"alpine-1","host":"localhost","port":2221,"user":"root","password":"test"}' \
+    https://localhost/machines
+  ```
+- GET /machines → list machines
+  ```bash
+  curl -k https://localhost/machines
+  ```
+- DELETE /machines/<name> → remove a machine
+  ```bash
+  curl -k -X DELETE https://localhost/machines/alpine-1
+  ```
+- GET /reserve → reserve N machines for a user
+  - Query params: username, password, count (default 1), duration (minutes, default 60)
+  ```bash
+  curl -k "https://localhost/reserve?username=alice&password=test&count=2&duration=60"
+  ```
+- GET /release_all → release all machines and delete users
+  ```bash
+  curl -k "https://localhost/release_all"
+  ```
+- GET /reservations → list active reservations and time remaining
+  ```bash
+  curl -k "https://localhost/reservations"
+  ```
+
+In production, configure the reverse proxy with a trusted certificate and remove -k.
+
+---
+
+## Registering machines
+
+Machines are listed in provision/machines.txt (one per line):
+```
+name host port user password
+```
+
+Bulk-register them:
 ```bash
-curl "http://localhost:8080/available"
-```
-**Response**:
-```json
-{
-  "available": ["alpine-container-1", "alpine-container-2", ...],
-  "reserved": ["alpine-container-3", ...]
-}
+just register-machine
 ```
 
-### **List Active Reservations**
+This uses utils/register_machines.py against the API at https://localhost/machines.
+
+---
+
+## Development (hot reload)
+
+Use the dev override:
 ```bash
-curl "http://localhost:8080/reservations"
-```
-**Response**:
-```json
-{
-  "reservations": [
-    {
-      "username": "alice",
-      "machine": "alpine-container-1",
-      "expiration_time": "2025-10-21T20:30:00",
-      "time_remaining": "58.5 minutes remaining"
-    },
-    ...
-  ]
-}
+just run-dev
 ```
 
-### **Release All Machines**
-```bash
-curl "http://localhost:8080/release_all"
-```
-**Response**:
-```json
-{
-  "status": "success",
-  "message": "All machines released"
-}
-```
+Dev behavior:
+- Host src/ is bind-mounted into /app/src inside api and scheduler containers.
+- API runs Gunicorn with --reload; edits under src/api will trigger worker restarts automatically (watch docker-logs-dev).
+- Scheduler code changes are visible via the bind mount; restart the scheduler service to apply code changes if it doesn’t self-reload.
+
+If hot reload seems flaky on macOS bind mounts, polling is enabled via WATCHFILES_FORCE_POLLING for better reliability.
 
 ---
 
-## **Features**
-- **Dynamic Pool Management**: Add/remove machines at runtime via API
-- **Automatic User Cleanup**: Users automatically deleted when reservations expire
-- **Custom Duration**: Set reservation duration (default: 60 minutes, minimum: 1 minute)
-- **Real-time Monitoring**: Check active reservations and time remaining
-- **Automatic Scheduling**: Background job checks for expired reservations every minute
-- **Bulk Register Machines**: Script to POST a batch of machines from a file
+## Troubleshooting
+
+- API not ready during registration:
+  - Check logs: `just docker-logs` or `just docker-logs-dev`
+  - Health check: `curl -k https://localhost/healthz`
+- Dev override not applied:
+  - Run with: `docker compose -f src/docker-compose.yml -f src/docker-compose.dev.override.yml up -d`
+  - Inspect merged config: `docker compose -f src/docker-compose.yml -f src/docker-compose.dev.override.yml config`
+  - Confirm the bind mount path matches /app/src in the image.
+- Database reset:
+  - `just docker-reset` or `just docker-reset-dev` (drops volumes)
+- Provisioning issues:
+  - Check Ansible output and your provision/machines.txt formatting (5 fields per line).
 
 ---
 
-## **Commands**
-| Command            | Description                                   |
-|--------------------|-----------------------------------------------|
-| `just setup`       | Install dependencies and set up venv          |
-| `just provision`   | Provision Docker containers/machines via Ansible |
-| `just run`         | Start the Flask API (foreground)              |
-| `just run-detached`| Start the Flask API (background, logs to api.log) |
-| `just register-machine` | Register provisioned machines from file   |
-| `just full-setup`  | Run all setup/provision/start/register steps  |
-| `just unprovision` | Unprovision all containers/machines via Ansible |
-| `just clean`       | Remove venv, database, and logs               |
-| `just full-clean`  | Unprovision, kill API, clean everything       |
+## Project layout
 
----
-
-## **Project Structure (2025)**
 ```
 .
-├── LICENSE
-├── README.md
-├── justfile
-├── requirements.txt
-├── src/
-│   ├── api.py                # Flask API (dynamic pool, timestamp fix)
-│   ├── create-users.yml      # Ansible playbook for user management
-│   └── requirements.txt
-├── provision/
-│   ├── Dockerfile
-│   ├── machines.txt          # List of provisioned machines for registration
-│   ├── provision.yml         # Ansible provisioning playbook
-│   └── unprovision.yml       # Ansible cleanup playbook
-├── utils/
-│   └── register_machines.py  # Script to bulk register machines with API
-└── api.log                   # API server log (when run in detached mode)
+├─ Justfile
+├─ requirements.txt                 # Host-side requirements for helper scripts
+├─ provision/
+│  ├─ machines.txt                  # Machines to be registered
+│  ├─ provision.yml                 # Ansible provisioning
+│  └─ unprovision.yml               # Ansible cleanup
+├─ src/
+│  ├─ docker-compose.yml            # Base stack (api, scheduler, db, reverse proxy)
+│  ├─ docker-compose.dev.override.yml  # Dev override: bind mounts + --reload
+│  ├─ api/
+│  │  ├─ Dockerfile                 # API image (copies code to /app/src/api)
+│  │  └─ gunicorn.conf.py
+│  ├─ scheduler/
+│  │  └─ Dockerfile                 # Scheduler image
+│  ├─ common/                       # Shared modules (DB init, wait_for_db, etc.)
+│  └─ reverse-proxy/                # Reverse proxy config (self-signed cert in dev)
+└─ utils/
+   └─ register_machines.py          # Bulk registration helper
 ```
 
 ---
-
-## **Testing the Automatic Deletion**
-1. Reserve a machine for 2 minutes:
-   ```bash
-   curl "http://localhost:8080/reserve?username=test&password=test&count=1&duration=2"
-   ```
-
-2. Check the reservation:
-   ```bash
-   curl "http://localhost:8080/reservations"
-   ```
-
-3. After 2+ minutes, verify the user is automatically deleted:
-   ```bash
-   curl "http://localhost:8080/reservations"  # Should show empty list
-   curl "http://localhost:8080/available"     # Should show the machine as available
-   ```
-
----
-
-## **Notes**
-- The API pool is now dynamic: you can POST new machines to `/machines` any time.
-- The `register_machines.py` script bulk-imports from the `machines.txt` file after provisioning.
-- Use `tail -f api.log` to watch server logs in real-time.
-- All connection info is stored in `src/containers.db`.
