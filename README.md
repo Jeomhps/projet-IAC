@@ -88,6 +88,11 @@ flowchart LR
   end
 
   Client -->|HTTPS 443| RP
+
+  ANS["Ansible (host)"]
+  TARGET["Compromised/Target Machine<br/>(SSH)"]
+
+  ANS -->|SSH 22| TARGET
 ```
 
 Notes:
