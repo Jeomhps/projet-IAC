@@ -27,37 +27,24 @@ flowchart LR
   Client["Client (Browser SPA + CLI curl)"]
 
   subgraph EDGE["edge network"]
-    RP["Reverse Proxy (Caddy)\nHTTPS :443\nServes SPA\nProxies /api → API"]
+    RP["Reverse Proxy (Caddy)<br/>HTTPS :443<br/>Serves SPA<br/>Proxies /api -> API"]
   end
 
   subgraph LAB["lab network"]
-    API["Flask API\nGunicorn :8080"]
+    API["Flask API<br/>Gunicorn :8080"]
     SCHED["Scheduler Worker"]
     DB[(MariaDB)]
   end
 
   Client -->|HTTPS 443| RP
-  RP -->|/api → HTTP :8080| API
+  RP -->|/api -> HTTP :8080| API
   API -->|SQL| DB
   SCHED -->|SQL| DB
 
-  Host["Host (Docker Engine)\nDemo 'alpine-container-N'\nports 22221..22230 → 22"]
+  Host["Host (Docker Engine)<br/>Demo 'alpine-container-N'<br/>ports 22221..22230 -> 22"]
 
   API -.->|SSH to host.docker.internal:222xx| Host
   SCHED -.->|SSH to host.docker.internal:222xx| Host
-```
-```
-
-Notes:
-- Separation: reverse-proxy attaches to edge and lab; API/DB/Scheduler only on lab.
-- The SPA and API are same-origin (site + /api). This is the standard SPA pattern.
-- macOS: host.docker.internal works by default.
-- Linux: add extra_hosts for API/Scheduler so host.docker.internal resolves to the host gateway.
-
-```yaml
-# In src/docker-compose.yml (Linux only; macOS not required)
-extra_hosts:
-  - "host.docker.internal:host-gateway"
 ```
 
 ---
