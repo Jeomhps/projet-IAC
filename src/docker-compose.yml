@@ -6,8 +6,6 @@ services:
       - MARIADB_USER=appuser
       - MARIADB_PASSWORD=apppass
       - MARIADB_ROOT_PASSWORD=rootpass
-    ports:
-      - "127.0.0.1:3306:3306"
     healthcheck:
       test: ["CMD-SHELL", "mariadb-admin ping -h 127.0.0.1 -uroot -p$$MARIADB_ROOT_PASSWORD --silent"]
       interval: 5s
@@ -16,14 +14,15 @@ services:
       start_period: 15s
     volumes:
       - db_data:/var/lib/mysql
+    networks:
+      - lab
 
   api:
     build:
       context: .
       dockerfile: api/Dockerfile
-    network_mode: "host"
     environment:
-      - DATABASE_URL=mysql+pymysql://appuser:apppass@127.0.0.1:3306/containers?charset=utf8mb4
+      - DATABASE_URL=mysql+pymysql://appuser:apppass@db:3306/containers?charset=utf8mb4
       - DB_CONNECT_MAX_RETRIES=120
       - DB_CONNECT_RETRY_SECONDS=1
       - WORKER_CLASS=sync
@@ -44,14 +43,17 @@ services:
       db:
         condition: service_healthy
     stop_grace_period: 30s
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - lab
 
   scheduler:
     build:
       context: .
       dockerfile: scheduler/Dockerfile
-    network_mode: "host"
     environment:
-      - DATABASE_URL=mysql+pymysql://appuser:apppass@127.0.0.1:3306/containers?charset=utf8mb4
+      - DATABASE_URL=mysql+pymysql://appuser:apppass@db:3306/containers?charset=utf8mb4
       - DB_CONNECT_MAX_RETRIES=120
       - DB_CONNECT_RETRY_SECONDS=1
       - DB_LOCK_TIMEOUT=0
@@ -63,19 +65,36 @@ services:
     stop_signal: SIGTERM
     stop_grace_period: 90s
     restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - lab
 
   reverse-proxy:
-    image: caddy:2
-    network_mode: "host"
+    build:
+      context: .
+      dockerfile: reverse-proxy/Dockerfile
+    ports:
+      - "443:443"
     environment:
       - DOMAIN=example.com
       - EMAIL=you@example.com
     volumes:
+      # Optionally bind-mount Caddyfile for quick edits; image also COPYs it
       - ./reverse-proxy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
+    networks:
+      - edge
+      - lab
 
 volumes:
   db_data:
   caddy_data:
   caddy_config:
+
+networks:
+  edge:
+    driver: bridge
+  lab:
+    driver: bridge
