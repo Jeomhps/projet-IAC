@@ -74,17 +74,20 @@ High level:
 
 ```mermaid
 flowchart LR
-    Client[(Client: curl, utils/register_machines.py)]
-    subgraph Docker_Network
-        RP[Reverse Proxy\n(HTTPS -> HTTP)]
-        API[Flask API\nGunicorn :8080]
-        SCHED[Scheduler Worker]
-        DB[(MariaDB)]
-        RP -->|HTTP :8080| API
-        API -- SQL --> DB
-        SCHED -- SQL --> DB
-    end
-    Client -->|HTTPS :443 (localhost)| RP
+  Client["Client: curl, utils/register_machines.py"]
+
+  subgraph Docker_Network
+    RP["Reverse Proxy<br/>(HTTPS → HTTP)"]
+    API["Flask API<br/>Gunicorn :8080"]
+    SCHED["Scheduler Worker"]
+    DB[(MariaDB)]
+
+    RP -->|HTTP :8080| API
+    API -->|SQL| DB
+    SCHED -->|SQL| DB
+  end
+
+  Client -->|HTTPS 443| RP
 ```
 
 Notes:
