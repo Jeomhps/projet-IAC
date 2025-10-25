@@ -78,8 +78,8 @@ flowchart LR
 
   subgraph Docker_Network
     RP["Reverse Proxy<br/>(HTTPS → HTTP)"]
-    API["Flask API<br/>Gunicorn :8080"]
-    SCHED["Scheduler Worker"]
+    API["Flask API<br/>Gunicorn :8080<br/><i>invokes Ansible</i>"]
+    SCHED["Scheduler Worker<br/><i>invokes Ansible</i>"]
     DB[(MariaDB)]
 
     RP -->|HTTP :8080| API
@@ -89,10 +89,10 @@ flowchart LR
 
   Client -->|HTTPS 443| RP
 
-  ANS["Ansible (host)"]
-  TARGET["Compromised/Target Machine<br/>(SSH)"]
+  TARGETS["Compromised/Target Machines<br/>(SSH 22)"]
 
-  ANS -->|SSH 22| TARGET
+  API -->|Ansible SSH 22| TARGETS
+  SCHED -->|Ansible SSH 22| TARGETS
 ```
 
 Notes:
