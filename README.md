@@ -23,7 +23,6 @@ High-level:
 - Demo machines: provisioned by Ansible as separate Docker containers with SSH exposed to host ports (22221, 22222, …). The API/Scheduler reach them via host.docker.internal.
 
 ```mermaid
-```mermaid
 flowchart LR
   Client["Client (Browser SPA + CLI curl)"]
 
