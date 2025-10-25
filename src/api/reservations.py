@@ -1,4 +1,4 @@
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, g
 from datetime import datetime, timedelta
 import tempfile
 import subprocess
@@ -8,6 +8,7 @@ from pathlib import Path
 from sqlalchemy import and_
 from common.db import get_session, Machine, Reservation
 from common.utils import sha512_hash_openssl
+from common.auth import require_auth, require_role
 
 logger = logging.getLogger(__name__)
 reservations_bp = Blueprint('reservations', __name__)
@@ -20,11 +21,22 @@ def get_available_machines(session):
     return session.query(Machine).filter(Machine.reserved == False).all()  # noqa: E712
 
 @reservations_bp.route("/reserve")
+@require_auth()
 def reserve_containers():
+    """
+    Authenticated: reserve N machines for a user (default: the authenticated API user).
+    Query params:
+      - username: logical username to create on target machines (defaults to current API user)
+      - reservation_password OR password: password to set on target machines (hashed via SHA-512 for Ansible)
+      - count: number of machines (default 1)
+      - duration: minutes (default 60)
+    """
     session = get_session()
     try:
-        username = request.args.get("username")
-        password = request.args.get("password", "test")
+        # Prefer explicit username, else default to the authenticated user
+        username = request.args.get("username") or g.current_user
+        # Backward compatibility: accept 'password' if 'reservation_password' not provided
+        reservation_password = request.args.get("reservation_password") or request.args.get("password", "test")
         count = int(request.args.get("count", 1))
         duration = int(request.args.get("duration", 60))
 
@@ -32,11 +44,14 @@ def reserve_containers():
             logger.warning("Username is required.")
             return jsonify({"error": "Username is required."}), 400
 
-        hashed_password = sha512_hash_openssl(password)
+        hashed_password = sha512_hash_openssl(reservation_password)
         available_machines = get_available_machines(session)
 
         if len(available_machines) < count:
-            logger.warning(f"Not enough available machines for user '{username}'. Requested {count}, got {len(available_machines)}.")
+            logger.warning(
+                "Not enough available machines for user '%s'. Requested %d, got %d.",
+                username, count, len(available_machines)
+            )
             return jsonify({"error": f"Only {len(available_machines)} machines available"}), 400
 
         reserved = available_machines[:count]
@@ -59,7 +74,7 @@ def reserve_containers():
             ], capture_output=True, text=True)
 
             if result.returncode != 0:
-                logger.error(f"Ansible failed for user '{username}': {result.stderr}")
+                logger.error("Ansible failed for user '%s': %s", username, result.stderr)
                 return jsonify({"error": "Failed to create user", "ansible_error": result.stderr}), 500
 
             connection_details = []
@@ -71,13 +86,16 @@ def reserve_containers():
                 connection_details.append({"machine": m.name, "host": m.host, "port": m.port})
 
             session.commit()
-            logger.info(f"Reserved {count} machines for user '{username}' until {reserved_until.isoformat(timespec='seconds')} UTC")
+            logger.info(
+                "Reserved %d machines for user '%s' until %s UTC",
+                count, username, reserved_until.isoformat(timespec='seconds')
+            )
             return jsonify({
                 "username": username,
                 "machines": connection_details,
                 "reserved_until": reserved_until.isoformat(timespec="seconds"),
                 "duration_minutes": duration,
-                "password": password
+                "reservation_password": reservation_password
             }), 200
         finally:
             if os.path.exists(temp_inventory_path):
@@ -86,7 +104,11 @@ def reserve_containers():
         session.close()
 
 @reservations_bp.route("/release_all")
+@require_role("admin")
 def release_all_containers():
+    """
+    Admin-only: delete all users from all machines via Ansible and clear all reservations.
+    """
     session = get_session()
     try:
         res = (
@@ -122,7 +144,7 @@ def release_all_containers():
                     "--extra-vars", f"username={username} user_action=delete"
                 ], capture_output=True, text=True)
                 if result.returncode != 0:
-                    logger.warning(f"Ansible error when deleting user '{username}': {result.stderr}")
+                    logger.warning("Ansible error when deleting user '%s': %s", username, result.stderr)
             finally:
                 if os.path.exists(temp_inventory_path):
                     os.unlink(temp_inventory_path)
@@ -142,12 +164,16 @@ def release_all_containers():
         session.close()
 
 @reservations_bp.route("/available")
+@require_auth()
 def available_containers():
+    """
+    Authenticated: show available vs reserved machines.
+    """
     session = get_session()
     try:
         available = [m.name for m in session.query(Machine).filter(Machine.reserved == False).all()]  # noqa: E712
         reserved = [m.name for m in session.query(Machine).filter(Machine.reserved == True).all()]    # noqa: E712
-        logger.info(f"Available: {len(available)}, Reserved: {len(reserved)}")
+        logger.info("Available: %d, Reserved: %d", len(available), len(reserved))
         return jsonify({
             "available": available,
             "reserved": reserved
@@ -156,31 +182,44 @@ def available_containers():
         session.close()
 
 @reservations_bp.route("/reservations")
+@require_auth()
 def list_reservations():
+    """
+    Authenticated: list active reservations with time remaining.
+    """
     session = get_session()
     try:
+        now = datetime.utcnow()
         rows = (
-            session.query(Reservation.username, Machine.name, Reservation.reserved_until)
+            session.query(
+                Reservation.id,
+                Reservation.username,
+                Reservation.reserved_until,
+                Machine.name,
+                Machine.host,
+                Machine.port
+            )
             .join(Machine, Machine.id == Reservation.machine_id)
             .all()
         )
-        result = []
-        now = datetime.utcnow()
-        for username, machine, expiration_dt in rows:
-            if expiration_dt is None:
-                time_remaining = "unknown"
-                expiration_str = None
-            else:
-                minutes_remaining = (expiration_dt - now).total_seconds() / 60
-                time_remaining = f"{minutes_remaining:.1f} minutes remaining"
-                expiration_str = expiration_dt.isoformat(timespec="seconds")
-            result.append({
+
+        items = []
+        for res_id, username, reserved_until, machine_name, host, port in rows:
+            seconds_remaining = None
+            if reserved_until is not None:
+                seconds_remaining = int((reserved_until - now).total_seconds())
+                if seconds_remaining < 0:
+                    seconds_remaining = 0
+
+            items.append({
+                "reservation_id": res_id,
                 "username": username,
-                "machine": machine,
-                "expiration_time": expiration_str,
-                "time_remaining": time_remaining
+                "machine": machine_name,
+                "host": host,
+                "port": port,
+                "reserved_until": reserved_until.isoformat() if reserved_until else None,
+                "seconds_remaining": seconds_remaining,
             })
-        logger.info(f"Listed {len(result)} reservations.")
-        return jsonify({"reservations": result}), 200
+        return jsonify({"reservations": items}), 200
     finally:
         session.close()

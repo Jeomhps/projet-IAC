@@ -2,37 +2,96 @@ from flask import Blueprint, request, jsonify
 import logging
 from sqlalchemy.exc import IntegrityError
 from common.db import get_session, Machine
+from common.auth import require_auth, require_role
 
 logger = logging.getLogger(__name__)
 machines_bp = Blueprint('machines', __name__)
 
 @machines_bp.route("/machines", methods=["POST"])
+@require_role("admin")
 def add_machine():
-    data = request.get_json() or {}
-    name = data.get("name")
-    host = data.get("host")
-    port = int(data.get("port", 22))
-    user = data.get("user", "root")
-    password = data.get("password", "test")
-    if not all([name, host, port, user, password]):
-        logger.warning(f"Missing parameters for machine: {data}")
-        return jsonify({"error": "Missing required machine parameters."}), 400
+    """
+    Admin-only: register a machine in the pool.
+    Body JSON: { "name": "...", "host": "...", "port": 22, "user": "...", "password": "..." }
+    """
+    data = request.get_json(silent=True) or {}
+    required = ["name", "host", "port", "user", "password"]
+    missing = [k for k in required if not data.get(k)]
+    if missing:
+        return jsonify({"error": "invalid_request", "message": f"Missing fields: {', '.join(missing)}"}), 400
 
     session = get_session()
     try:
-        machine = Machine(name=name, host=host, port=port, user=user, password=password)
-        session.add(machine)
+        m = Machine(
+            name=str(data["name"]).strip(),
+            host=str(data["host"]).strip(),
+            port=int(data["port"]),
+            user=str(data["user"]).strip(),
+            password=str(data["password"]),
+            reserved=False,
+            reserved_by=None,
+            reserved_until=None,
+        )
+        session.add(m)
         session.commit()
-        # Downgrade to DEBUG to reduce noise; switch LOG_LEVEL=DEBUG if you want to see these
-        logger.debug(f"Added machine: {name} ({host}:{port})")
-        return jsonify({"name": name, "host": host, "port": port, "user": user}), 201
+        logger.info("Added machine %s (%s:%s)", m.name, m.host, m.port)
+        return jsonify({
+            "name": m.name,
+            "host": m.host,
+            "port": m.port,
+            "user": m.user,
+            "reserved": m.reserved,
+            "reserved_by": m.reserved_by,
+            "reserved_until": m.reserved_until.isoformat() if m.reserved_until else None
+        }), 201
     except IntegrityError:
         session.rollback()
-        logger.warning(f"Duplicate machine name attempted: {name}")
-        return jsonify({"error": "Machine name must be unique."}), 400
-    except Exception as e:
-        session.rollback()
-        logger.error(f"Failed to add machine {name}: {e}")
-        return jsonify({"error": f"Failed to add machine: {e}"}), 400
+        return jsonify({"error": "conflict", "message": "Machine with this name already exists"}), 409
+    finally:
+        session.close()
+
+@machines_bp.route("/machines", methods=["GET"])
+@require_auth()
+def list_machines():
+    """
+    Authenticated: list all machines and their reservation status.
+    """
+    session = get_session()
+    try:
+        machines = session.query(Machine).order_by(Machine.name.asc()).all()
+        return jsonify([
+            {
+                "name": m.name,
+                "host": m.host,
+                "port": m.port,
+                "user": m.user,
+                "reserved": m.reserved,
+                "reserved_by": m.reserved_by,
+                "reserved_until": m.reserved_until.isoformat() if m.reserved_until else None,
+            }
+            for m in machines
+        ]), 200
+    finally:
+        session.close()
+
+@machines_bp.route("/machines/<name>", methods=["DELETE"])
+@require_role("admin")
+def delete_machine(name: str):
+    """
+    Admin-only: delete a machine from the pool.
+    Disallows deleting a machine that is currently reserved.
+    """
+    session = get_session()
+    try:
+        m = session.query(Machine).filter(Machine.name == name).one_or_none()
+        if not m:
+            return jsonify({"error": "not_found", "message": "Machine not found"}), 404
+        if m.reserved:
+            return jsonify({"error": "bad_request", "message": "Machine is currently reserved; release first"}), 400
+
+        session.delete(m)
+        session.commit()
+        logger.info("Deleted machine %s", name)
+        return jsonify({"message": "deleted"}), 200
     finally:
         session.close()

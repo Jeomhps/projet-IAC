@@ -6,6 +6,8 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from common.db import init_db
 from .machines import machines_bp
 from .reservations import reservations_bp
+from .auth import auth_bp
+from common.auth import ensure_default_admin
 
 def setup_logging():
     log_level = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -25,6 +27,10 @@ def create_app():
     app = Flask(__name__)
     app.config["JSONIFY_PRETTYPRINT_REGULAR"] = True
     init_db()
+    ensure_default_admin()  # Seed a default admin if env vars provided
+
+    # Register blueprints (auth first so /login is available)
+    app.register_blueprint(auth_bp)
     app.register_blueprint(machines_bp)
     app.register_blueprint(reservations_bp)
 

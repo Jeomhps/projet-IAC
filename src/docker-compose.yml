@@ -33,6 +33,11 @@ services:
       - ENABLE_ACCESS_LOG=false
       - LOG_LEVEL=INFO
       - ANSIBLE_FORKS=5           # Limit Ansible parallelism inside API
+      # Auth config
+      - JWT_SECRET=${JWT_SECRET:-change-me-in-prod}
+      - JWT_EXPIRES_MINUTES=60
+      - ADMIN_DEFAULT_USERNAME=${ADMIN_DEFAULT_USERNAME:-admin}
+      - ADMIN_DEFAULT_PASSWORD=${ADMIN_DEFAULT_PASSWORD:-change-me}
     depends_on:
       db:
         condition: service_healthy
