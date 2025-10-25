@@ -1,6 +1,7 @@
 import os
 import logging
 import time
+from datetime import datetime
 from sqlalchemy import (
     create_engine,
     Column,
@@ -77,6 +78,15 @@ def _wait_for_db_ready(engine, max_retries=None, delay=None):
             logger.info(f"Waiting for database... attempt {attempt}/{max_retries} ({e})")
             time.sleep(delay)
     raise last_exc
+
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True)
+    username = Column(String(255), unique=True, nullable=False, index=True)
+    password_hash = Column(String(255), nullable=False)
+    is_admin = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
 class Machine(Base):
     __tablename__ = "machines"
