@@ -50,17 +50,28 @@ In production, you should use a reverse proxy with a trusted (verified) certific
 ## Commands (from Justfile)
 
 - run: setup venv + provision + docker-up + register-machine
+  - Usage:
+    - just run                 # default: 10 containers, password "test"
+    - just run 25              # 25 containers
+    - just run 25 mypass       # 25 containers, password "mypass"
 - run-dev: setup venv + provision + docker-up-dev + register-machine (hot reload)
+  - Usage:
+    - just run-dev             # default: 10 containers, password "test"
+    - just run-dev 25          # 25 containers
+    - just run-dev 25 mypass   # 25 containers, password "mypass"
 - docker-up: docker compose up -d (base compose only)
 - docker-up-dev: docker compose up -d with src/docker-compose.dev.override.yml
 - logs / logs-dev: follow logs for api, scheduler
 - docker-down / docker-down-dev: stop the stack
 - docker-reset / docker-reset-dev: stop and delete volumes (fresh DB)
-- provision / unprovision / reprovision: run Ansible playbooks
-- register-machine: POST all entries from provision/machines.txt to the API
+- provision: run Ansible provisioning
+  - Usage:
+    - just provision                 # default: 10 containers, password "test"
+    - just provision 25              # 25 containers
+    - just provision 40 mypass       # 40 containers, password "mypass"
+- unprovision: run Ansible cleanup (removes machines listed in provision/machines file)
+- register-machine: POST all entries from provision/machines file to the API
 - clean: unprovision, reset volumes (both variants), remove venv
-
-The Justfile uses a local Python venv to run the helper script.
 
 ---
 
