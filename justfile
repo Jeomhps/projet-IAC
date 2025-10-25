@@ -1,59 +1,82 @@
-# Project variables
-API_DIR := "src"
+# Paths
+SRC_DIR := "src"
+API_DIR := "src/api"
+COMPOSE_FILE := "src/docker-compose.yml"
+DEV_OVERRIDE := "src/docker-compose.dev.override.yml"
 VENV_DIR := "venv"
+PY := "venv/bin/python3"
+PIP := "venv/bin/pip"
 REQUIREMENTS := "requirements.txt"
 
-PROVISION_DIR := "provision"
-PROVISION_PLAYBOOK := "provision/provision.yml"
-UNPROVISION_PLAYBOOK := "provision/unprovision.yml"
-#DOCKERFILE := "{{PROVISION_DIR}}/Dockerfile"
-
-# Install dependencies and set up venv
 setup:
     python3 -m venv {{VENV_DIR}}
-    . {{VENV_DIR}}/bin/activate && \
-    pip install -r {{REQUIREMENTS}}
+    {{PIP}} install -r {{REQUIREMENTS}}
 
-# Run the API
-run:
-    . {{VENV_DIR}}/bin/activate && \
-    python3 {{API_DIR}}/api.py
+# Bring up the Docker stack (detached) WITHOUT override
+docker-up:
+    docker compose -f {{COMPOSE_FILE}} up -d --build
 
-run-detached:
-    . {{VENV_DIR}}/bin/activate && \
-    nohup python3 {{API_DIR}}/api.py > api.log 2>&1 &
+# Bring up the Docker stack (detached) WITH dev override
+docker-up-dev:
+    docker compose -f {{COMPOSE_FILE}} -f {{DEV_OVERRIDE}} up -d --build
 
-# Provisionning containers
+# Follow logs (no override)
+logs:
+    docker compose -f {{COMPOSE_FILE}} logs -f api scheduler
+
+# Follow logs (dev override)
+logs-dev:
+    docker compose -f {{COMPOSE_FILE}} -f {{DEV_OVERRIDE}} logs -f api scheduler
+
+# Stop the stack (no override)
+docker-down:
+    docker compose -f {{COMPOSE_FILE}} down
+
+# Stop the stack (dev override)
+docker-down-dev:
+    docker compose -f {{COMPOSE_FILE}} -f {{DEV_OVERRIDE}} down
+
+# Stop and delete volumes (fresh DB) (no override)
+docker-reset:
+    docker compose -f {{COMPOSE_FILE}} down -v
+
+# Stop and delete volumes (dev override)
+docker-reset-dev:
+    docker compose -f {{COMPOSE_FILE}} -f {{DEV_OVERRIDE}} down -v
+
+# Provision containers with Ansible
 provision:
-    ansible-playbook {{PROVISION_PLAYBOOK}}
+    ansible-playbook provision/provision.yml
 
+# Unprovision containers with Ansible
 unprovision:
-    ansible-playbook {{UNPROVISION_PLAYBOOK}}
+    ansible-playbook provision/unprovision.yml
 
 reprovision:
     just unprovision
     just provision
 
+# Register machines into the API from provision/machines.txt
 register-machine:
-  . {{VENV_DIR}}/bin/activate && \
-  python3 utils/register_machines.py \
-    provision/machines.txt
+    PYTHONPATH={{SRC_DIR}} {{PY}} utils/register_machines.py provision/machines.txt
 
-# Clean up
-clean:
-    rm -rf {{VENV_DIR}} {{API_DIR}}/containers.db api.log
-
-full-setup:
+# One-shot: setup, provision, bring up Docker (no override), register
+run:
     just setup
     just provision
-    just run-detached
-    sleep 3
+    just docker-up
     just register-machine
 
-full-clean:
-    just unprovision
-    pkill -f "{{API_DIR}}/api.py" || true
-    just clean
+# One-shot: setup, provision, bring up Docker with dev override, register
+run-dev:
+    just setup
+    just provision
+    just docker-up-dev
+    just register-machine
 
-watch:
-  tail -f api.log
+# Renamed clean: teardown and cleanup
+clean:
+    just unprovision || true
+    just docker-reset || true
+    just docker-reset-dev || true
+    rm -rf {{VENV_DIR}}

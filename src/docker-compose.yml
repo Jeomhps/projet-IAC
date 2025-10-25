@@ -1,0 +1,70 @@
+services:
+  db:
+    image: mariadb:11
+    environment:
+      - MARIADB_DATABASE=containers
+      - MARIADB_USER=appuser
+      - MARIADB_PASSWORD=apppass
+      - MARIADB_ROOT_PASSWORD=rootpass
+    ports:
+      - "127.0.0.1:3306:3306"
+    healthcheck:
+      test: ["CMD-SHELL", "mariadb-admin ping -h 127.0.0.1 -uroot -p$$MARIADB_ROOT_PASSWORD --silent"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 15s
+    volumes:
+      - db_data:/var/lib/mysql
+
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    network_mode: "host"
+    environment:
+      - DATABASE_URL=mysql+pymysql://appuser:apppass@127.0.0.1:3306/containers?charset=utf8mb4
+      - DB_CONNECT_MAX_RETRIES=120
+      - DB_CONNECT_RETRY_SECONDS=1
+      - WORKER_CLASS=sync
+      - WEB_CONCURRENCY=4
+      - GTHREADS=1
+      - GUNICORN_LOGLEVEL=info
+      - ENABLE_ACCESS_LOG=false
+      - LOG_LEVEL=INFO
+    depends_on:
+      db:
+        condition: service_healthy
+    stop_grace_period: 30s
+
+  scheduler:
+    build:
+      context: .
+      dockerfile: scheduler/Dockerfile
+    network_mode: "host"
+    environment:
+      - DATABASE_URL=mysql+pymysql://appuser:apppass@127.0.0.1:3306/containers?charset=utf8mb4
+      - DB_CONNECT_MAX_RETRIES=120
+      - DB_CONNECT_RETRY_SECONDS=1
+      - DB_LOCK_TIMEOUT=0
+    depends_on:
+      db:
+        condition: service_healthy
+    stop_signal: SIGTERM
+    stop_grace_period: 90s
+
+  reverse-proxy:
+    image: caddy:2
+    network_mode: "host"
+    environment:
+      - DOMAIN=example.com         # change to your domain
+      - EMAIL=you@example.com      # change to your email for Let's Encrypt
+    volumes:
+      - ./reverse-proxy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  db_data:
+  caddy_data:
+  caddy_config:

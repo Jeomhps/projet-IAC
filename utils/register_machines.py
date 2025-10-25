@@ -1,8 +1,11 @@
 import requests
 import sys
 import os
+import urllib3
 
-API_URL = "http://localhost:8080/machines"  # Change if your API is elsewhere
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+API_URL = os.getenv("API_URL", "https://localhost/machines")
 
 def main(machines_file):
     # Resolve absolute path based on where you run the script
@@ -29,7 +32,8 @@ def main(machines_file):
                 "password": password
             }
             try:
-                resp = requests.post(API_URL, json=payload)
+                # verify=False ignores TLS certificate verification (unsafe for prod)
+                resp = requests.post(API_URL, json=payload, verify=False)
                 if resp.status_code == 201:
                     print(f"Added {name}")
                 else:
