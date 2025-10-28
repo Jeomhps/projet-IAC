@@ -1,6 +1,5 @@
 from flask import Blueprint, request, jsonify, g
 import logging
-from typing import Optional
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import and_
 from common.db import get_session, Machine
@@ -12,22 +11,22 @@ machines_bp = Blueprint('machines', __name__)
 def _is_admin() -> bool:
     return "admin" in (getattr(g, "current_roles", []) or [])
 
-def _serialize_machine(m: Machine, admin: bool, current_user: Optional[str]):
+def _serialize_machine(m: Machine, admin: bool):
+    # Non-admin: only minimal info (privacy and security)
     data = {
         "name": m.name,
-        "host": m.host,
-        "port": m.port,
         "reserved": m.reserved,
         "reserved_until": m.reserved_until.isoformat() if m.reserved_until else None,
     }
-    if admin or (current_user and m.reserved_by == current_user):
-        data["reserved_by"] = m.reserved_by
     if admin:
         data.update({
+            "host": m.host,
+            "port": m.port,
+            "user": m.user,
+            "reserved_by": m.reserved_by,
             "enabled": m.enabled,
             "online": m.online,
             "last_seen_at": m.last_seen_at.isoformat() if m.last_seen_at else None,
-            "user": m.user,
         })
     return data
 
@@ -57,7 +56,8 @@ def add_machine():
         )
         session.add(m)
         session.commit()
-        return jsonify(_serialize_machine(m, True, None)), 201
+        logger.info("machine.add name=%s host=%s port=%s", m.name, m.host, m.port)
+        return jsonify(_serialize_machine(m, True)), 201
     except IntegrityError:
         session.rollback()
         return jsonify({"error": "conflict", "message": "Machine with this name already exists"}), 409
@@ -89,8 +89,9 @@ def list_machines():
 
         machines = q.order_by(Machine.name.asc()).all()
         admin = _is_admin()
-        current_user = getattr(g, "current_user", None)
-        return jsonify([_serialize_machine(m, admin, current_user) for m in machines]), 200
+        out = [_serialize_machine(m, admin) for m in machines]
+        logger.info("machines.list admin=%s count=%d", admin, len(out))
+        return jsonify(out), 200
     finally:
         session.close()
 
@@ -103,8 +104,8 @@ def get_machine(name: str):
         if not m:
             return jsonify({"error": "not_found", "message": "Machine not found"}), 404
         admin = _is_admin()
-        current_user = getattr(g, "current_user", None)
-        return jsonify(_serialize_machine(m, admin, current_user)), 200
+        logger.info("machines.get name=%s admin=%s", name, admin)
+        return jsonify(_serialize_machine(m, admin)), 200
     finally:
         session.close()
 
@@ -122,7 +123,8 @@ def update_machine(name: str):
             if field in data:
                 setattr(m, field, data[field])
         session.commit()
-        return jsonify(_serialize_machine(m, True, None)), 200
+        logger.info("machine.update name=%s", m.name)
+        return jsonify(_serialize_machine(m, True)), 200
     finally:
         session.close()
 
@@ -139,6 +141,7 @@ def delete_machine(name: str):
 
         session.delete(m)
         session.commit()
+        logger.info("machine.delete name=%s", name)
         return jsonify({"message": "deleted"}), 200
     finally:
         session.close()

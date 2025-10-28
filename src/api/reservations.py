@@ -62,15 +62,26 @@ def list_reservations():
             seconds_remaining = None
             if reserved_until is not None:
                 seconds_remaining = max(0, int((reserved_until - now).total_seconds()))
-            items.append({
-                "id": res_id,
-                "username": username if admin or username == current_user else None,
-                "machine": machine_name,
-                "host": host,
-                "port": port,
-                "reserved_until": reserved_until.isoformat() if reserved_until else None,
-                "seconds_remaining": seconds_remaining,
-            })
+            if admin:
+                items.append({
+                    "id": res_id,
+                    "username": username,
+                    "machine": machine_name,
+                    "host": host,
+                    "port": port,
+                    "reserved_until": reserved_until.isoformat() if reserved_until else None,
+                    "seconds_remaining": seconds_remaining,
+                })
+            else:
+                items.append({
+                    # no id, no username for non-admin
+                    "machine": machine_name,
+                    "host": host,
+                    "port": port,
+                    "reserved_until": reserved_until.isoformat() if reserved_until else None,
+                    "seconds_remaining": seconds_remaining,
+                })
+        logger.info("reservations.list admin=%s count=%d", admin, len(items))
         return jsonify({"reservations": items}), 200
     finally:
         session.close()
@@ -94,6 +105,7 @@ def create_reservation():
     try:
         available = _eligible_machines(session)
         if len(available) < count:
+            logger.warning("reservations.create insufficient available requested=%d available=%d user=%s", count, len(available), username)
             return jsonify({"error": "not_enough_available", "available": len(available)}), 409
 
         reserved = available[:count]
@@ -114,6 +126,7 @@ def create_reservation():
                 "--extra-vars", f"username={username} hashed_password={hashed_password} user_action=create"
             ], capture_output=True, text=True)
             if result.returncode != 0:
+                logger.error("reservations.create ansible_failed user=%s stderr=%s", username, result.stderr)
                 return jsonify({"error": "ansible_failed", "details": result.stderr}), 500
 
             conn = []
@@ -125,8 +138,9 @@ def create_reservation():
                 conn.append({"machine": m.name, "host": m.host, "port": m.port})
 
             session.commit()
+            logger.info("reservations.create ok user=%s count=%d until=%s", username, count, reserved_until.isoformat())
             return jsonify({
-                "username": username,
+                "username": username if admin else None,
                 "machines": conn,
                 "reserved_until": reserved_until.isoformat(timespec="seconds"),
                 "duration_minutes": duration
@@ -164,9 +178,18 @@ def get_reservation(reservation_id: int):
         if not admin and username != current_user:
             return jsonify({"error": "forbidden"}), 403
 
+        logger.info("reservations.get id=%d admin=%s user=%s", res_id, admin, current_user)
+        if admin:
+            return jsonify({
+                "id": res_id,
+                "username": username,
+                "machine": machine_name,
+                "host": host,
+                "port": port,
+                "reserved_until": reserved_until.isoformat() if reserved_until else None
+            }), 200
+        # Non-admin: do not expose the id or username back
         return jsonify({
-            "id": res_id,
-            "username": username if admin or username == current_user else None,
             "machine": machine_name,
             "host": host,
             "port": port,
@@ -203,7 +226,7 @@ def delete_reservation(reservation_id: int):
                     "--extra-vars", f"username={res.username} user_action=delete"
                 ], capture_output=True, text=True)
                 if result.returncode != 0:
-                    logger.warning("Ansible delete error for user=%s on %s: %s", res.username, m.name, result.stderr)
+                    logger.warning("reservations.delete ansible_warn id=%d user=%s stderr=%s", res.id, res.username, result.stderr)
             finally:
                 if os.path.exists(temp_inventory_path):
                     os.unlink(temp_inventory_path)
@@ -213,6 +236,7 @@ def delete_reservation(reservation_id: int):
 
         session.delete(res)
         session.commit()
+        logger.info("reservations.delete id=%d admin=%s by=%s", reservation_id, admin, current_user)
         return jsonify({"message": "deleted"}), 200
     finally:
         session.close()

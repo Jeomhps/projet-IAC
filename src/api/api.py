@@ -1,7 +1,8 @@
 import logging
 import os
 import sys
-from flask import Flask
+import time
+from flask import Flask, request, g
 from werkzeug.middleware.proxy_fix import ProxyFix
 from common.db import init_db
 from .machines import machines_bp
@@ -19,7 +20,8 @@ def setup_logging():
         root.removeHandler(h)
     root.addHandler(handler)
     root.setLevel(log_level)
-    logging.getLogger("werkzeug").setLevel(logging.WARNING)
+    # Keep werkzeug access logs visible (INFO)
+    logging.getLogger("werkzeug").setLevel(logging.INFO)
 
 setup_logging()
 
@@ -29,13 +31,30 @@ def create_app():
     init_db()
     ensure_default_admin()  # Seed a default admin if env vars provided
 
-    # Register blueprints (auth first so /login is available)
+    # Register blueprints
     app.register_blueprint(auth_bp)
     app.register_blueprint(machines_bp)
     app.register_blueprint(reservations_bp)
 
     # Trust one proxy hop (Caddy/Nginx in front)
     app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
+
+    # Simple request logging (method, path, status, duration, user)
+    @app.before_request
+    def _start_timer():
+        g._start_time = time.time()
+
+    @app.after_request
+    def _log_request(resp):
+        try:
+            duration_ms = 1000.0 * (time.time() - getattr(g, "_start_time", time.time()))
+            user = getattr(g, "current_user", "-")
+            app.logger.info("%s %s -> %d in %.1fms user=%s",
+                            request.method, request.path, resp.status_code, duration_ms, user)
+        except Exception:
+            # avoid breaking responses due to logging
+            pass
+        return resp
 
     @app.get("/healthz")
     def healthz():
