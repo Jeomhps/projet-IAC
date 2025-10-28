@@ -172,3 +172,5 @@ venv.bak/
 *.sqlite3
 *.log
 
+# ---> go 
+**/registrar
