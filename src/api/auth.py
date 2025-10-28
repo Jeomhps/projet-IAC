@@ -41,12 +41,13 @@ def login():
 @auth_bp.get("/auth/me")
 @require_auth()
 def me():
-    return jsonify({"username": g.current_user, "roles": g.current_roles, "is_admin": _is_admin()}), 200
+    # KISS: only return what clients need
+    return jsonify({"username": g.current_user, "is_admin": _is_admin()}), 200
 
 @auth_bp.post("/auth/refresh")
 @require_auth()
 def refresh():
-    token = create_access_token(g.current_user, roles=g.current_roles)
+    token = create_access_token(g.current_user, roles=getattr(g, "current_roles", []))
     return jsonify({"access_token": token, "token_type": "Bearer", "expires_in": 60 * 60}), 200
 
 # Users (admin)

@@ -6,7 +6,7 @@ import os
 import logging
 from pathlib import Path
 from sqlalchemy import and_
-from common.db import get_session, Machine, Reservation
+from common.db import get_session, Machine, Reservation, User
 from common.utils import sha512_hash_openssl
 from common.auth import require_auth
 
@@ -93,16 +93,23 @@ def create_reservation():
     count = int(data.get("count", 1))
     duration = int(data.get("duration_minutes", 60))
     reservation_password = data.get("reservation_password") or data.get("password")
+    # Do not allow overriding username in body; always use the authenticated API user
+    if "username" in data:
+        return jsonify({"error": "invalid_request", "message": "username must not be provided"}), 400
     if not reservation_password:
         return jsonify({"error": "invalid_request", "message": "reservation_password is required"}), 400
 
-    admin = _is_admin()
-    username = data.get("username") if admin and data.get("username") else getattr(g, "current_user", None)
+    username = getattr(g, "current_user", None)
     if not username:
         return jsonify({"error": "invalid_request", "message": "username could not be determined"}), 400
 
     session = get_session()
     try:
+        user = session.query(User).filter(User.username == username).one_or_none()
+        if not user:
+            logger.error("reservations.create user not found in DB: %s", username)
+            return jsonify({"error": "server_error", "message": "user not found"}), 500
+
         available = _eligible_machines(session)
         if len(available) < count:
             logger.warning("reservations.create insufficient available requested=%d available=%d user=%s", count, len(available), username)
@@ -131,7 +138,7 @@ def create_reservation():
 
             conn = []
             for m in reserved:
-                session.add(Reservation(machine_id=m.id, username=username, reserved_until=reserved_until))
+                session.add(Reservation(machine_id=m.id, user_id=user.id, username=username, reserved_until=reserved_until))
                 m.reserved = True
                 m.reserved_by = username
                 m.reserved_until = reserved_until
@@ -139,8 +146,8 @@ def create_reservation():
 
             session.commit()
             logger.info("reservations.create ok user=%s count=%d until=%s", username, count, reserved_until.isoformat())
+            # KISS: do not return username; caller already knows who they are
             return jsonify({
-                "username": username if admin else None,
                 "machines": conn,
                 "reserved_until": reserved_until.isoformat(timespec="seconds"),
                 "duration_minutes": duration
@@ -188,7 +195,7 @@ def get_reservation(reservation_id: int):
                 "port": port,
                 "reserved_until": reserved_until.isoformat() if reserved_until else None
             }), 200
-        # Non-admin: do not expose the id or username back
+        # Non-admin: hide id and username
         return jsonify({
             "machine": machine_name,
             "host": host,

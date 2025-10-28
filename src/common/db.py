@@ -114,12 +114,17 @@ class Reservation(Base):
 
     id = Column(Integer, primary_key=True)
     machine_id = Column(Integer, ForeignKey("machines.id", ondelete="CASCADE"), nullable=False)
+    # new: reference the user row, not just username; keep username for compatibility/backfill
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True)
     username = Column(String(255), nullable=False)
     reserved_until = Column(DateTime, nullable=True)
 
     machine = relationship("Machine", back_populates="reservations")
 
 def init_db():
+    """
+    Initialize the database and create tables, then apply light migrations for SQLite.
+    """
     global _engine, _SessionLocal
 
     engine, _ = _ensure_engine_and_session()
@@ -141,6 +146,30 @@ def init_db():
                 raise
 
     Base.metadata.create_all(bind=engine)
+
+    # Minimal, SQLite-safe migrations:
+    if url.startswith("sqlite:"):
+        with engine.begin() as conn:
+            # Add reservations.user_id if missing
+            cols = [row[1] for row in conn.exec_driver_sql("PRAGMA table_info(reservations)").fetchall()]
+            if "user_id" not in cols:
+                conn.exec_driver_sql("ALTER TABLE reservations ADD COLUMN user_id INTEGER")
+                # Backfill using username
+                conn.exec_driver_sql("""
+                    UPDATE reservations
+                    SET user_id = (
+                        SELECT id FROM users WHERE users.username = reservations.username
+                    )
+                    WHERE user_id IS NULL
+                """)
+            # Add machines.enabled/online/last_seen_at if missing (best-effort)
+            mcols = [row[1] for row in conn.exec_driver_sql("PRAGMA table_info(machines)").fetchall()]
+            if "enabled" not in mcols:
+                conn.exec_driver_sql("ALTER TABLE machines ADD COLUMN enabled BOOLEAN DEFAULT 1 NOT NULL")
+            if "online" not in mcols:
+                conn.exec_driver_sql("ALTER TABLE machines ADD COLUMN online BOOLEAN DEFAULT 1 NOT NULL")
+            if "last_seen_at" not in mcols:
+                conn.exec_driver_sql("ALTER TABLE machines ADD COLUMN last_seen_at DATETIME")
 
 def get_session():
     _, SessionLocal = _ensure_engine_and_session()

@@ -18,6 +18,11 @@ JWT_ISSUER = os.getenv("JWT_ISSUER", "projet-iac-api")
 ADMIN_DEFAULT_USERNAME = os.getenv("ADMIN_DEFAULT_USERNAME", "")
 ADMIN_DEFAULT_PASSWORD = os.getenv("ADMIN_DEFAULT_PASSWORD", "")
 
+# Reserved usernames for provisioning safety (prevent changing privileged accounts)
+_DEFAULT_BLOCKED = {"root"}
+_EXTRA = {u.strip() for u in os.getenv("BLOCKED_USERNAMES", "").split(",") if u.strip()}
+BLOCKED_USERNAMES = {*(name for name in _DEFAULT_BLOCKED if name)} | _EXTRA
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -107,9 +112,10 @@ def verify_user_credentials(session, username: str, password: str) -> Optional[U
 
 def create_user(session, username: str, password: str, is_admin: bool = False) -> User:
     """
-    Create a user. Safe to call concurrently: if a duplicate is inserted by another
-    worker between check and commit, we catch IntegrityError and surface a ValueError.
+    Create a user, with blocked username guard.
     """
+    if username in BLOCKED_USERNAMES:
+        raise ValueError(f"Username '{username}' is not allowed")
     existing = get_user_by_username(session, username)
     if existing:
         raise ValueError("User already exists")
@@ -124,24 +130,30 @@ def create_user(session, username: str, password: str, is_admin: bool = False) -
         session.commit()
     except IntegrityError:
         session.rollback()
-        # Another process inserted the same username concurrently.
         raise ValueError("User already exists")
     return user
 
 def ensure_default_admin() -> None:
     """
     Create a default admin user if ADMIN_DEFAULT_USERNAME and ADMIN_DEFAULT_PASSWORD are set.
-    Concurrency-safe: ignores duplicate insert races.
+    Ignores duplicate insert races.
     """
     if not ADMIN_DEFAULT_USERNAME or not ADMIN_DEFAULT_PASSWORD:
         return
     session = get_session()
     try:
-        # Attempt to create; if it already exists (or a race happens), ignore.
         try:
-            create_user(session, ADMIN_DEFAULT_USERNAME, ADMIN_DEFAULT_PASSWORD, is_admin=True)
-        except ValueError:
-            # Already exists or concurrent insert won the race
-            pass
+            # allow default admin even if BLOCKED_USERNAMES contains it
+            existing = get_user_by_username(session, ADMIN_DEFAULT_USERNAME)
+            if not existing:
+                user = User(
+                    username=ADMIN_DEFAULT_USERNAME,
+                    password_hash=generate_password_hash(ADMIN_DEFAULT_PASSWORD),
+                    is_admin=True,
+                )
+                session.add(user)
+                session.commit()
+        except IntegrityError:
+            session.rollback()
     finally:
         session.close()
