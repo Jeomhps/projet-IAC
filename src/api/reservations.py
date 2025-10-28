@@ -34,6 +34,7 @@ def list_reservations():
         q = (
             session.query(
                 Reservation.id,
+                Reservation.user_id,
                 Reservation.username,
                 Reservation.reserved_until,
                 Machine.name,
@@ -58,13 +59,14 @@ def list_reservations():
         now = datetime.utcnow()
         rows = q.all()
         items = []
-        for res_id, username, reserved_until, machine_name, host, port in rows:
+        for res_id, user_id, username, reserved_until, machine_name, host, port in rows:
             seconds_remaining = None
             if reserved_until is not None:
                 seconds_remaining = max(0, int((reserved_until - now).total_seconds()))
             if admin:
                 items.append({
                     "id": res_id,
+                    "user_id": user_id,
                     "username": username,
                     "machine": machine_name,
                     "host": host,
@@ -74,7 +76,7 @@ def list_reservations():
                 })
             else:
                 items.append({
-                    # no id, no username for non-admin
+                    # no id, no user_id, no username for non-admin
                     "machine": machine_name,
                     "host": host,
                     "port": port,
@@ -93,7 +95,7 @@ def create_reservation():
     count = int(data.get("count", 1))
     duration = int(data.get("duration_minutes", 60))
     reservation_password = data.get("reservation_password") or data.get("password")
-    # Do not allow overriding username in body; always use the authenticated API user
+    # Always use the authenticated API user
     if "username" in data:
         return jsonify({"error": "invalid_request", "message": "username must not be provided"}), 400
     if not reservation_password:
@@ -168,6 +170,7 @@ def get_reservation(reservation_id: int):
         row = (
             session.query(
                 Reservation.id,
+                Reservation.user_id,
                 Reservation.username,
                 Reservation.reserved_until,
                 Machine.name,
@@ -181,7 +184,7 @@ def get_reservation(reservation_id: int):
         if not row:
             return jsonify({"error": "not_found"}), 404
 
-        res_id, username, reserved_until, machine_name, host, port = row
+        res_id, user_id, username, reserved_until, machine_name, host, port = row
         if not admin and username != current_user:
             return jsonify({"error": "forbidden"}), 403
 
@@ -189,13 +192,14 @@ def get_reservation(reservation_id: int):
         if admin:
             return jsonify({
                 "id": res_id,
+                "user_id": user_id,
                 "username": username,
                 "machine": machine_name,
                 "host": host,
                 "port": port,
                 "reserved_until": reserved_until.isoformat() if reserved_until else None
             }), 200
-        # Non-admin: hide id and username
+        # Non-admin: hide id, user_id, username
         return jsonify({
             "machine": machine_name,
             "host": host,

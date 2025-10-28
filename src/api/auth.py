@@ -65,7 +65,12 @@ def create_user_endpoint():
     session = get_session()
     try:
         user = create_user(session, username, password, is_admin=is_admin)
-        return jsonify({"username": user.username, "is_admin": user.is_admin, "created_at": user.created_at.isoformat()}), 201
+        return jsonify({
+            "id": user.id,
+            "username": user.username,
+            "is_admin": user.is_admin,
+            "created_at": user.created_at.isoformat()
+        }), 201
     except ValueError as e:
         return jsonify({"error": "conflict", "message": str(e)}), 409
     finally:
@@ -77,7 +82,15 @@ def list_users():
     session = get_session()
     try:
         users = session.query(User).all()
-        return jsonify([{"username": u.username, "is_admin": u.is_admin, "created_at": u.created_at.isoformat()} for u in users]), 200
+        return jsonify([
+            {
+                "id": u.id,
+                "username": u.username,
+                "is_admin": u.is_admin,
+                "created_at": u.created_at.isoformat()
+            }
+            for u in users
+        ]), 200
     finally:
         session.close()
 
@@ -89,7 +102,12 @@ def get_user_endpoint(username: str):
         user = get_user_by_username(session, username)
         if not user:
             return jsonify({"error": "not_found", "message": "user not found"}), 404
-        return jsonify({"username": user.username, "is_admin": user.is_admin, "created_at": user.created_at.isoformat()}), 200
+        return jsonify({
+            "id": user.id,
+            "username": user.username,
+            "is_admin": user.is_admin,
+            "created_at": user.created_at.isoformat()
+        }), 200
     finally:
         session.close()
 
@@ -115,7 +133,12 @@ def update_user_endpoint(username: str):
             return jsonify({"error": "invalid_request", "message": "no updatable fields provided"}), 400
 
         session.commit()
-        return jsonify({"username": user.username, "is_admin": user.is_admin, "created_at": user.created_at.isoformat()}), 200
+        return jsonify({
+            "id": user.id,
+            "username": user.username,
+            "is_admin": user.is_admin,
+            "created_at": user.created_at.isoformat()
+        }), 200
     finally:
         session.close()
 
