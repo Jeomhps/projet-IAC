@@ -192,7 +192,6 @@ Environment variables (key ones):
   - CLEANUP_BATCH_SIZE (default: 20)
   - ANSIBLE_FORKS (default: 5)
   - DB_LOCK_TIMEOUT (seconds; 0 = try-lock, no wait)
-  - SCHEDULER_DISABLE_LOCK (true/false; disable advisory lock)
 
 - Reverse proxy (Caddy)
   - Listens on 443 and proxies to the API at http://api:8080 (no path prefix)
