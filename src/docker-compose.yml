@@ -52,18 +52,21 @@ services:
     networks:
       - lab
 
-
   scheduler:
     build:
       context: .
-      dockerfile: scheduler/Dockerfile
+      dockerfile: scheduler-go/Dockerfile
     environment:
-      - DATABASE_URL=mysql+pymysql://appuser:apppass@db:3306/containers?charset=utf8mb4
-      - DB_CONNECT_MAX_RETRIES=120
-      - DB_CONNECT_RETRY_SECONDS=1
-      - DB_LOCK_TIMEOUT=0
+      - DB_HOST=db
+      - DB_PORT=3306
+      - DB_NAME=containers
+      - DB_USER=appuser
+      - DB_PASSWORD=apppass
       - ANSIBLE_FORKS=5
       - CLEANUP_BATCH_SIZE=20
+      - DB_LOCK_TIMEOUT=0
+      # Optional loop tuning (defaults shown)
+      # - SCHEDULER_INTERVAL=60
     depends_on:
       db:
         condition: service_healthy
@@ -74,6 +77,28 @@ services:
       - "host.docker.internal:host-gateway"
     networks:
       - lab
+
+  # scheduler:
+  #   build:
+  #     context: .
+  #     dockerfile: scheduler/Dockerfile
+  #   environment:
+  #     - DATABASE_URL=mysql+pymysql://appuser:apppass@db:3306/containers?charset=utf8mb4
+  #     - DB_CONNECT_MAX_RETRIES=120
+  #     - DB_CONNECT_RETRY_SECONDS=1
+  #     - DB_LOCK_TIMEOUT=0
+  #     - ANSIBLE_FORKS=5
+  #     - CLEANUP_BATCH_SIZE=20
+  #   depends_on:
+  #     db:
+  #       condition: service_healthy
+  #   stop_signal: SIGTERM
+  #   stop_grace_period: 90s
+  #   restart: unless-stopped
+  #   extra_hosts:
+  #     - "host.docker.internal:host-gateway"
+  #   networks:
+  #     - lab
 
   reverse-proxy:
     image: caddy:2.8-alpine
