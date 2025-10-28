@@ -9,6 +9,7 @@
     container_count_int: "{{ container_count | int }}"
     base_ssh_port: 22220                # first container will use 22221
     inventory_yaml: "{{ playbook_dir }}/machines.yml"
+
   tasks:
     - name: Build custom Alpine image (if Dockerfile changed)
       community.docker.docker_image:
@@ -31,19 +32,6 @@
           - "{{ (base_ssh_port | int) + (item | int) }}:22"
         recreate: yes
       loop: "{{ range(1, container_count_int + 1) | list }}"
-
-    - name: Wait briefly before scanning for SSH keys
-      ansible.builtin.command: sleep 2
-      changed_when: false
-
-    - name: Add new SSH host keys to known_hosts
-      ansible.builtin.shell: >
-        ssh-keyscan -p {{ (base_ssh_port | int) + (item | int) }} localhost >> ~/.ssh/known_hosts 2>/dev/null
-      loop: "{{ range(1, container_count_int + 1) | list }}"
-      changed_when: false
-      retries: 3
-      delay: 2
-      until: true
 
     - name: Generate inventory file in YAML
       ansible.builtin.copy:
