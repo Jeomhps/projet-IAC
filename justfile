@@ -60,5 +60,4 @@ run count="10" password="test":
 clean:
     just unprovision || true
     just docker-reset || true
-    just docker-reset-dev || true
     rm -rf {{VENV_DIR}}
