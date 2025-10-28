@@ -20,25 +20,17 @@ services:
   api:
     build:
       context: .
-      dockerfile: api/Dockerfile
+      dockerfile: api-go/Dockerfile
     environment:
       - DATABASE_URL=mysql+pymysql://appuser:apppass@db:3306/containers?charset=utf8mb4
-      - DB_CONNECT_MAX_RETRIES=120
-      - DB_CONNECT_RETRY_SECONDS=1
-      - WORKER_CLASS=sync
-      - WEB_CONCURRENCY=4
-      - GTHREADS=1
-      - GUNICORN_LOGLEVEL=info
-      - ENABLE_ACCESS_LOG=false
       - LOG_LEVEL=INFO
       - ANSIBLE_FORKS=5
       # Auth config
       - JWT_SECRET=${JWT_SECRET:-change-me-in-prod}
-      - JWT_EXPIRES_MINUTES=60
+      #- JWT_EXPIRES_MINUTES=60
+      - ANSIBLE_HOST_KEY_CHECKING=false
       - ADMIN_DEFAULT_USERNAME=${ADMIN_DEFAULT_USERNAME:-admin}
       - ADMIN_DEFAULT_PASSWORD=${ADMIN_DEFAULT_PASSWORD:-change-me}
-      # Run app init once in master, then fork workers
-      - WEB_PRELOAD_APP=true
     depends_on:
       db:
         condition: service_healthy
