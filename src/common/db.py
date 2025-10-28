@@ -17,7 +17,6 @@ from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 
 logger = logging.getLogger(__name__)
 
-# Default to SQLite for development
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_SQLITE_PATH = os.path.abspath(os.path.join(BASE_DIR, "containers.db"))
 
@@ -58,7 +57,7 @@ def _ensure_engine_and_session():
             autoflush=False,
             autocommit=False,
             expire_on_commit=False,
-            future=True
+            future=True,
         )
     return _engine, _SessionLocal
 
@@ -97,9 +96,16 @@ class Machine(Base):
     port = Column(Integer, nullable=False, default=22)
     user = Column(String(255), nullable=False)
     password = Column(String(255), nullable=False)
+
+    # Reservation state
     reserved = Column(Boolean, nullable=False, default=False)
     reserved_by = Column(String(255), nullable=True)
     reserved_until = Column(DateTime, nullable=True)
+
+    # Eligibility state (no separate pools)
+    enabled = Column(Boolean, nullable=False, default=True)
+    online = Column(Boolean, nullable=False, default=True)
+    last_seen_at = Column(DateTime, nullable=True)
 
     reservations = relationship("Reservation", back_populates="machine", cascade="all, delete-orphan")
 
@@ -114,10 +120,6 @@ class Reservation(Base):
     machine = relationship("Machine", back_populates="reservations")
 
 def init_db():
-    """
-    Initialize the database and create tables.
-    For non-SQLite URLs, wait until the DB is ready. Optional fallback to SQLite if DB_FALLBACK_TO_SQLITE=true.
-    """
     global _engine, _SessionLocal
 
     engine, _ = _ensure_engine_and_session()
@@ -128,7 +130,7 @@ def init_db():
             _wait_for_db_ready(engine)
         except Exception as e:
             if os.getenv("DB_FALLBACK_TO_SQLITE", "").lower() in ("1", "true", "yes"):
-                logger.warning(f"External DB not ready, falling back to SQLite due to DB_FALLBACK_TO_SQLITE: {e}")
+                logger.warning(f"External DB not ready, falling back to SQLite: {e}")
                 _engine = _create_engine(f"sqlite:///{DEFAULT_SQLITE_PATH}")
                 _SessionLocal = sessionmaker(
                     bind=_engine, autoflush=False, autocommit=False, expire_on_commit=False, future=True

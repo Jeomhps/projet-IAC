@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Register machines with the API.
+Register machines with the API (new endpoints).
 
 Usage:
   python utils/register_machines.py provision/machines.yml
@@ -19,14 +19,8 @@ Environment variables:
   ADMIN_DEFAULT_USERNAME: Admin username for login (default: admin)
   ADMIN_DEFAULT_PASSWORD: Admin password for login (default: change-me)
   VERIFY_TLS: "true"/"false" to verify TLS (default: false for local self-signed)
-  REWRITE_LOCALHOST: "true"/"false" to rewrite localhost → host.docker.internal (default: true)
+  REWRITE_LOCALHOST: "true"/"false" rewrite localhost → host.docker.internal (default: true)
   DOCKER_HOST_GATEWAY_NAME: name to use instead of localhost (default: host.docker.internal)
-
-Notes:
-- On macOS, host.docker.internal works out of the box.
-- On Linux, ensure your api/scheduler services have:
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
 """
 from __future__ import annotations
 import json
@@ -110,7 +104,8 @@ def parse_machines_file(path: str) -> List[Dict[str, Any]]:
 
 
 def login_for_token(user: str, password: str) -> str:
-    url = api_url("/login")
+    # New API endpoint
+    url = api_url("/auth/login")
     try:
         resp = requests.post(url, json={"username": user, "password": password}, verify=VERIFY_TLS)
     except requests.RequestException as e:
@@ -177,8 +172,12 @@ def main(argv: List[str]) -> int:
             continue
 
         if resp.status_code in (200, 201):
-            host_display = resp.json().get("host", m.get("host"))
-            port_display = resp.json().get("port", m.get("port"))
+            try:
+                body = resp.json()
+            except ValueError:
+                body = {}
+            host_display = body.get("host", m.get("host"))
+            port_display = body.get("port", m.get("port"))
             print(f"Added {m['name']} ({host_display}:{port_display})")
         else:
             any_failed = True
