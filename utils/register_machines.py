@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Register machines with the API (new endpoints).
+Register machines with the API (new endpoints, no /api prefix).
 
 Usage:
   python utils/register_machines.py provision/machines.yml
@@ -15,7 +15,7 @@ machines:
 
 Environment variables:
   API_BASE: Base URL for the site (default: https://localhost)
-  API_PREFIX: Path prefix to the API (default: /api)
+  API_PREFIX: Path prefix to the API (default: "" — no prefix)
   ADMIN_DEFAULT_USERNAME: Admin username for login (default: admin)
   ADMIN_DEFAULT_PASSWORD: Admin password for login (default: change-me)
   VERIFY_TLS: "true"/"false" to verify TLS (default: false for local self-signed)
@@ -47,7 +47,8 @@ def env_flag(name: str, default: bool) -> bool:
 
 
 API_BASE = os.getenv("API_BASE", "https://localhost").rstrip("/")
-API_PREFIX = os.getenv("API_PREFIX", "/api")
+# No /api anymore; default to empty prefix. Still allow override if someone sets it.
+API_PREFIX = os.getenv("API_PREFIX", "")
 API_PREFIX = ("" if not API_PREFIX else ("/" + API_PREFIX.lstrip("/")))
 
 ADMIN_USER = os.getenv("ADMIN_DEFAULT_USERNAME", "admin")
@@ -104,10 +105,10 @@ def parse_machines_file(path: str) -> List[Dict[str, Any]]:
 
 
 def login_for_token(user: str, password: str) -> str:
-    # New API endpoint
+    # New API endpoint (no /api prefix)
     url = api_url("/auth/login")
     try:
-        resp = requests.post(url, json={"username": user, "password": password}, verify=VERIFY_TLS)
+        resp = requests.post(url, json={"username": user, "password": password}, verify=VERIFY_TLS, timeout=15)
     except requests.RequestException as e:
         print(f"Login request failed: {e}")
         return ""
@@ -133,7 +134,7 @@ def post_machine(token: str, m: Dict[str, Any]) -> requests.Response:
     if REWRITE_LOCALHOST and payload.get("host") in ("localhost", "127.0.0.1"):
         payload["host"] = DOCKER_HOST_GATEWAY_NAME
 
-    return requests.post(url, headers=headers, data=json.dumps(payload), verify=VERIFY_TLS)
+    return requests.post(url, headers=headers, data=json.dumps(payload), verify=VERIFY_TLS, timeout=20)
 
 
 def main(argv: List[str]) -> int:
