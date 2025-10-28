@@ -16,33 +16,17 @@ setup:
 docker-up:
     docker compose -f {{COMPOSE_FILE}} up -d --build
 
-# Bring up the Docker stack (detached) WITH dev override
-docker-up-dev:
-    docker compose -f {{COMPOSE_FILE}} -f {{DEV_OVERRIDE}} up -d --build
-
 # Follow logs (no override)
 logs:
     docker compose -f {{COMPOSE_FILE}} logs -f api scheduler
-
-# Follow logs (dev override)
-logs-dev:
-    docker compose -f {{COMPOSE_FILE}} -f {{DEV_OVERRIDE}} logs -f api scheduler
 
 # Stop the stack (no override)
 docker-down:
     docker compose -f {{COMPOSE_FILE}} down
 
-# Stop the stack (dev override)
-docker-down-dev:
-    docker compose -f {{COMPOSE_FILE}} -f {{DEV_OVERRIDE}} down
-
 # Stop and delete volumes (fresh DB) (no override)
 docker-reset:
     docker compose -f {{COMPOSE_FILE}} down -v
-
-# Stop and delete volumes (dev override)
-docker-reset-dev:
-    docker compose -f {{COMPOSE_FILE}} -f {{DEV_OVERRIDE}} down -v
 
 # Provision containers with Ansible (set count and password)
 # Usage:
@@ -70,13 +54,6 @@ run count="10" password="test":
     just setup
     just provision {{count}} {{password}}
     just docker-up
-    just register-machine
-
-# One-shot: setup, provision, bring up Docker with dev override, register
-run-dev count="10" password="test":
-    just setup
-    just provision {{count}} {{password}}
-    just docker-up-dev
     just register-machine
 
 # Teardown and cleanup
