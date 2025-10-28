@@ -15,9 +15,11 @@ import (
 func main() {
 	cfg := config.Load()
 
-	d, err := db.OpenFromDATABASE_URL(cfg.DatabaseURL)
+	dsn := cfg.DSN()
+	d, err := db.Open(dsn)
 	if err != nil { log.Fatalf("db: %v", err) }
 	defer d.Close()
+
 	if err := db.EnsureSchema(d); err != nil { log.Fatalf("ensure schema: %v", err) }
 
 	// Seed default admin (optional)

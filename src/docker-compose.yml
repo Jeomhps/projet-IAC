@@ -22,23 +22,36 @@ services:
       context: .
       dockerfile: api-go/Dockerfile
     environment:
-      - DATABASE_URL=mysql+pymysql://appuser:apppass@db:3306/containers?charset=utf8mb4
-      - LOG_LEVEL=INFO
-      - ANSIBLE_FORKS=5
-      # Auth config
+      - DB_HOST=db
+      - DB_PORT=3306
+      - DB_NAME=containers
+      - DB_USER=appuser
+      - DB_PASSWORD=apppass
+
+      # Optional DB tuning (defaults shown)
+      # - DB_CHARSET=utf8mb4
+      # - DB_COLLATION=utf8mb4_unicode_ci
+      # - DB_TIMEOUT=5s
+      # - DB_READ_TIMEOUT=5s
+      # - DB_WRITE_TIMEOUT=5s
+
+      # auth config
       - JWT_SECRET=${JWT_SECRET:-change-me-in-prod}
       #- JWT_EXPIRES_MINUTES=60
-      - ANSIBLE_HOST_KEY_CHECKING=false
+
+      # default account for the API
       - ADMIN_DEFAULT_USERNAME=${ADMIN_DEFAULT_USERNAME:-admin}
       - ADMIN_DEFAULT_PASSWORD=${ADMIN_DEFAULT_PASSWORD:-change-me}
+
+      # ansible related
+      - ANSIBLE_FORKS=5
+      - ANSIBLE_HOST_KEY_CHECKING=false
     depends_on:
       db:
         condition: service_healthy
-    stop_grace_period: 30s
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     networks:
       - lab
+
 
   scheduler:
     build:
