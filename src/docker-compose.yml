@@ -20,81 +20,75 @@ services:
   api:
     build:
       context: .
-      dockerfile: api/Dockerfile
+      dockerfile: api-go/Dockerfile
     environment:
-      - DATABASE_URL=mysql+pymysql://appuser:apppass@db:3306/containers?charset=utf8mb4
-      - DB_CONNECT_MAX_RETRIES=120
-      - DB_CONNECT_RETRY_SECONDS=1
-      - WORKER_CLASS=sync
-      - WEB_CONCURRENCY=4
-      - GTHREADS=1
-      - GUNICORN_LOGLEVEL=info
-      - ENABLE_ACCESS_LOG=false
-      - LOG_LEVEL=INFO
-      - ANSIBLE_FORKS=5
+      - DB_HOST=db
+      - DB_PORT=3306
+      - DB_NAME=containers
+      - DB_USER=appuser
+      - DB_PASSWORD=apppass
+
+      # Optional DB tuning (defaults shown)
+      # - DB_CHARSET=utf8mb4
+      # - DB_COLLATION=utf8mb4_unicode_ci
+      # - DB_TIMEOUT=5s
+      # - DB_READ_TIMEOUT=5s
+      # - DB_WRITE_TIMEOUT=5s
+
       # Auth config
       - JWT_SECRET=${JWT_SECRET:-change-me-in-prod}
-      - JWT_EXPIRES_MINUTES=60
+      #- JWT_EXPIRES_MINUTES=60 need to reimplement it
+
+      # Default account for the API
       - ADMIN_DEFAULT_USERNAME=${ADMIN_DEFAULT_USERNAME:-admin}
       - ADMIN_DEFAULT_PASSWORD=${ADMIN_DEFAULT_PASSWORD:-change-me}
-      # Run app init once in master, then fork workers
-      - WEB_PRELOAD_APP=true
+
+      # Ansible-related
+      - ANSIBLE_FORKS=5
     depends_on:
       db:
         condition: service_healthy
-    stop_grace_period: 30s
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     networks:
       - lab
 
   scheduler:
     build:
       context: .
-      dockerfile: scheduler/Dockerfile
+      dockerfile: scheduler-go/Dockerfile
     environment:
-      - DATABASE_URL=mysql+pymysql://appuser:apppass@db:3306/containers?charset=utf8mb4
-      - DB_CONNECT_MAX_RETRIES=120
-      - DB_CONNECT_RETRY_SECONDS=1
-      - DB_LOCK_TIMEOUT=0
+      - DB_HOST=db
+      - DB_PORT=3306
+      - DB_NAME=containers
+      - DB_USER=appuser
+      - DB_PASSWORD=apppass
       - ANSIBLE_FORKS=5
       - CLEANUP_BATCH_SIZE=20
+      - DB_LOCK_TIMEOUT=0
+      # Optional loop tuning (defaults shown)
+      # - SCHEDULER_INTERVAL=60
     depends_on:
       db:
         condition: service_healthy
     stop_signal: SIGTERM
     stop_grace_period: 90s
     restart: unless-stopped
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     networks:
       - lab
 
   reverse-proxy:
-    build:
-      context: .
-      dockerfile: reverse-proxy/Dockerfile
+    image: caddy:2.8-alpine
     ports:
       - "443:443"
-    environment:
-      - DOMAIN=example.com
-      - EMAIL=you@example.com
     volumes:
-      # Optionally bind-mount Caddyfile for quick edits; image also COPYs it
       - ./reverse-proxy/Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
+    depends_on:
+      - api
     networks:
-      - edge
       - lab
 
 volumes:
   db_data:
-  caddy_data:
-  caddy_config:
 
 networks:
-  edge:
-    driver: bridge
   lab:
     driver: bridge

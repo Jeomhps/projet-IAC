@@ -1,28 +1,8 @@
-localhost {
-  encode zstd gzip
+# Local-only HTTPS on https://localhost (port 443), proxying to the API service.
+# Uses Caddy's internal CA (self-signed). Browser will show a warning unless you trust Caddy's local root CA.
 
-  route {
-    # API: strip /api and proxy to Flask on api:8080
-    handle_path /api/* {
-      reverse_proxy api:8080
-    }
-
-    # Optional: convenience passthrough so curl https://localhost/healthz hits the API too
-    handle /healthz {
-      reverse_proxy api:8080
-    }
-
-    # Fallback: serve the SPA for everything else
-    handle {
-      root * /srv/web
-      try_files {path} {path}/ /index.html
-      file_server
-    }
-  }
-
-  tls internal
-  header {
-    Strict-Transport-Security "max-age=31536000"
-    X-Content-Type-Options "nosniff"
-  }
+localhost:443 {
+	tls internal
+	encode zstd gzip
+	reverse_proxy http://api:8080
 }
