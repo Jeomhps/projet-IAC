@@ -35,17 +35,16 @@ services:
       # - DB_READ_TIMEOUT=5s
       # - DB_WRITE_TIMEOUT=5s
 
-      # auth config
+      # Auth config
       - JWT_SECRET=${JWT_SECRET:-change-me-in-prod}
-      #- JWT_EXPIRES_MINUTES=60
+      #- JWT_EXPIRES_MINUTES=60 need to reimplement it
 
-      # default account for the API
+      # Default account for the API
       - ADMIN_DEFAULT_USERNAME=${ADMIN_DEFAULT_USERNAME:-admin}
       - ADMIN_DEFAULT_PASSWORD=${ADMIN_DEFAULT_PASSWORD:-change-me}
 
-      # ansible related
+      # Ansible-related
       - ANSIBLE_FORKS=5
-      - ANSIBLE_HOST_KEY_CHECKING=false
     depends_on:
       db:
         condition: service_healthy
@@ -73,58 +72,23 @@ services:
     stop_signal: SIGTERM
     stop_grace_period: 90s
     restart: unless-stopped
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     networks:
       - lab
-
-  # scheduler:
-  #   build:
-  #     context: .
-  #     dockerfile: scheduler/Dockerfile
-  #   environment:
-  #     - DATABASE_URL=mysql+pymysql://appuser:apppass@db:3306/containers?charset=utf8mb4
-  #     - DB_CONNECT_MAX_RETRIES=120
-  #     - DB_CONNECT_RETRY_SECONDS=1
-  #     - DB_LOCK_TIMEOUT=0
-  #     - ANSIBLE_FORKS=5
-  #     - CLEANUP_BATCH_SIZE=20
-  #   depends_on:
-  #     db:
-  #       condition: service_healthy
-  #   stop_signal: SIGTERM
-  #   stop_grace_period: 90s
-  #   restart: unless-stopped
-  #   extra_hosts:
-  #     - "host.docker.internal:host-gateway"
-  #   networks:
-  #     - lab
 
   reverse-proxy:
     image: caddy:2.8-alpine
     ports:
-      - "80:80"
       - "443:443"
-    environment:
-      - DOMAIN=example.com
-      - EMAIL=you@example.com
     volumes:
       - ./reverse-proxy/Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
     depends_on:
       - api
     networks:
-      - edge
       - lab
 
 volumes:
   db_data:
-  caddy_data:
-  caddy_config:
 
 networks:
-  edge:
-    driver: bridge
   lab:
     driver: bridge
