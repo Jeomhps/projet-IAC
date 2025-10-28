@@ -63,19 +63,19 @@ services:
       - lab
 
   reverse-proxy:
-    build:
-      context: .
-      dockerfile: reverse-proxy/Dockerfile
+    image: caddy:2.8-alpine
     ports:
+      - "80:80"
       - "443:443"
     environment:
       - DOMAIN=example.com
       - EMAIL=you@example.com
     volumes:
-      # Optionally bind-mount Caddyfile for quick edits; image also COPYs it
       - ./reverse-proxy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
+    depends_on:
+      - api
     networks:
       - edge
       - lab
