@@ -11,6 +11,7 @@ import (
 	"os/exec"
 
 	"github.com/Jeomhps/projet-IAC/scheduler-go/internal/db"
+	"github.com/Jeomhps/projet-IAC/scheduler-go/internal/runner"
 )
 
 // Checker performs SSH reachability checks against registered machines
@@ -21,6 +22,7 @@ import (
 // Concurrency and per-host timeouts are configurable.
 type Checker struct {
 	DB          *db.DB
+	Runner      runner.PlaybookRunner
 	Concurrency int           // number of concurrent SSH checks
 	Timeout     time.Duration // per-host timeout
 }
@@ -89,6 +91,10 @@ func (c Checker) RunOnce(ctx context.Context) (Stats, error) {
 						log.Printf("health: set enabled=true failed for %s (%s:%d): %v", m.Name, m.Host, m.Port, err)
 					} else {
 						atomic.AddInt32(&reenabled, 1)
+						// Opportunistic cleanup: machine just re-enabled, try to clear any expired reservations now.
+						if err := opportunisticCleanup(ctx, c.DB, c.Runner, m); err != nil && ctx.Err() == nil {
+							log.Printf("health: opportunistic cleanup failed for %s: %v", m.Name, err)
+						}
 					}
 				}
 				atomic.AddInt32(&reachable, 1)
@@ -164,3 +170,31 @@ func trySSH(ctx context.Context, m db.MachineRow, timeout time.Duration) bool {
 	}
 	return true
 }
+
+// opportunisticCleanup attempts to delete expired reservation users on a machine
+// that just became reachable again, and then clears the reservations in DB.
+func opportunisticCleanup(ctx context.Context, d *db.DB, pr runner.PlaybookRunner, m db.MachineRow) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	rows, err := db.LoadExpiredForMachine(d, m.ID)
+	if err != nil {
+		return err
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+
+	for _, row := range rows {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		// Best-effort delete; logs will follow runner's configured behavior
+		if err := pr.RunDeleteUserSingleHost(ctx, row.Name, row.Host, row.Port, row.SSHUser, row.Pass, row.User); err == nil {
+			_ = db.ClearReservationsAndRelease(d, [][2]int{{row.ResID, row.MID}})
+		}
+	}
+	return nil
+}
+
+// runAnsibleDeleteSingle runs the delete user playbook for a single host.

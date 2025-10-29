@@ -76,6 +76,7 @@ func main() {
 				defer a2.Release()
 				hc := health.Checker{
 					DB:          d,
+					Runner:      runner.PlaybookRunner{Playbook: cfg.PlaybookPath, Forks: cfg.Forks},
 					Concurrency: cfg.HealthCheckConcurrency,
 					Timeout:     time.Duration(cfg.HealthCheckTimeoutSec) * time.Second,
 				}

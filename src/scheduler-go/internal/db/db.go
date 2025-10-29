@@ -111,3 +111,23 @@ func SetMachineEnabled(d *DB, id int, enabled bool) error {
 	_, err := d.Exec(`UPDATE machines SET enabled=? WHERE id=?`, enabled, id)
 	return err
 }
+
+// LoadExpiredForMachine returns expired reservations for a specific machine.
+// It mirrors LoadExpired but filters to a single machine_id.
+func LoadExpiredForMachine(d *DB, machineID int) ([]ExpiredRow, error) {
+	q := `
+SELECT r.id AS res_id, r.machine_id, r.username,
+       m.name, m.host, m.port, m.user, m.password
+FROM reservations r
+JOIN machines m ON m.id = r.machine_id
+WHERE r.reserved_until IS NOT NULL
+  AND r.reserved_until <= UTC_TIMESTAMP()
+  AND m.enabled=1
+  AND r.machine_id = ?
+ORDER BY r.username ASC, r.id ASC`
+	var rows []ExpiredRow
+	if err := d.Select(&rows, q, machineID); err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
