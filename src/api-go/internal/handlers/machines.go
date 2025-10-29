@@ -66,6 +66,8 @@ func (h *Machines) List(c *gin.Context) {
 			item["enabled"] = m.Enabled
 			item["online"] = m.Online
 			item["last_seen_at"] = formatTimePtr(m.LastSeenAt)
+			item["reserve_fail_count"] = m.ReserveFailCount
+			item["quarantine_until"] = formatTimePtr(m.QuarantineUntil)
 		}
 		out = append(out, item)
 	}
@@ -95,6 +97,8 @@ func (h *Machines) Get(c *gin.Context) {
 		item["enabled"] = m.Enabled
 		item["online"] = m.Online
 		item["last_seen_at"] = formatTimePtr(m.LastSeenAt)
+		item["reserve_fail_count"] = m.ReserveFailCount
+		item["quarantine_until"] = formatTimePtr(m.QuarantineUntil)
 	}
 	c.JSON(http.StatusOK, item)
 }
@@ -119,6 +123,7 @@ func (h *Machines) Create(c *gin.Context) {
 		"name": m.Name, "host": m.Host, "port": m.Port, "user": m.User,
 		"reserved": m.Reserved, "reserved_by": m.ReservedBy, "reserved_until": formatTimePtr(m.ReservedUntil),
 		"enabled": m.Enabled, "online": m.Online, "last_seen_at": formatTimePtr(m.LastSeenAt),
+		"reserve_fail_count": m.ReserveFailCount, "quarantine_until": formatTimePtr(m.QuarantineUntil),
 	})
 }
 

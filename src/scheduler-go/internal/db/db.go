@@ -131,3 +131,16 @@ ORDER BY r.username ASC, r.id ASC`
 	}
 	return rows, nil
 }
+
+// EnableIfDisabled sets enabled=1 only if currently disabled; returns whether it changed.
+func EnableIfDisabled(d *DB, id int) (bool, error) {
+	res, err := d.Exec(`UPDATE machines SET enabled=1 WHERE id=? AND enabled=0`, id)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}

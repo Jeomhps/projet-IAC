@@ -86,15 +86,13 @@ func (c Checker) RunOnce(ctx context.Context) (Stats, error) {
 				if err := db.TouchMachineLastSeen(c.DB, m.ID); err != nil {
 					log.Printf("health: touch last_seen_at failed for %s (%s:%d): %v", m.Name, m.Host, m.Port, err)
 				}
-				if !m.Enabled {
-					if err := db.SetMachineEnabled(c.DB, m.ID, true); err != nil {
-						log.Printf("health: set enabled=true failed for %s (%s:%d): %v", m.Name, m.Host, m.Port, err)
-					} else {
-						atomic.AddInt32(&reenabled, 1)
-						// Opportunistic cleanup: machine just re-enabled, try to clear any expired reservations now.
-						if err := opportunisticCleanup(ctx, c.DB, c.Runner, m); err != nil && ctx.Err() == nil {
-							log.Printf("health: opportunistic cleanup failed for %s: %v", m.Name, err)
-						}
+				if changed, err := db.EnableIfDisabled(c.DB, m.ID); err != nil {
+					log.Printf("health: set enabled=true failed for %s (%s:%d): %v", m.Name, m.Host, m.Port, err)
+				} else if changed {
+					atomic.AddInt32(&reenabled, 1)
+					// Opportunistic cleanup: machine just re-enabled, try to clear any expired reservations now.
+					if err := opportunisticCleanup(ctx, c.DB, c.Runner, m); err != nil && ctx.Err() == nil {
+						log.Printf("health: opportunistic cleanup failed for %s: %v", m.Name, err)
 					}
 				}
 				atomic.AddInt32(&reachable, 1)

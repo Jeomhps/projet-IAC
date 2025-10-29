@@ -39,30 +39,37 @@ func (c Cleaner) RunOnce(ctx context.Context) (int, error) {
 
 	total := 0
 	for username, items := range byUser {
-		// Process per-host to decide DB changes based on Ansible outcome
-		for _, r := range items {
+		// Process in batches and use Ansible recap to decide per-host outcome
+		for i := 0; i < len(items); i += c.BatchSize {
 			if ctx.Err() != nil {
 				return total, ctx.Err()
 			}
+			end := i + c.BatchSize
+			if end > len(items) {
+				end = len(items)
+			}
+			chunk := items[i:end]
 
-			inv, err := c.writeInventory([]db.ExpiredRow{r})
+			inv, err := c.writeInventory(chunk)
 			if err != nil {
 				return total, err
 			}
 
-			// Run deletion for this single host
-			runErr := c.Runner.RunDeleteUser(ctx, inv, username)
+			summary, _ := c.Runner.RunDeleteUserWithSummary(ctx, inv, username)
 			_ = os.Remove(inv)
 
-			if runErr == nil {
-				// Clear reservation only on success
-				if err := db.ClearReservationsAndRelease(c.DB, [][2]int{{r.ResID, r.MID}}); err != nil {
-					return total, err
+			// Apply results per host
+			for _, r := range chunk {
+				status := summary[r.Name]
+				if status == "ok" {
+					if err := db.ClearReservationsAndRelease(c.DB, [][2]int{{r.ResID, r.MID}}); err != nil {
+						return total, err
+					}
+					total++
+				} else {
+					// Disable machine on failure for later retry when reachable
+					_ = db.SetMachineEnabled(c.DB, r.MID, false)
 				}
-				total++
-			} else {
-				// Disable machine on failure for later retry when reachable
-				_ = db.SetMachineEnabled(c.DB, r.MID, false)
 			}
 		}
 	}

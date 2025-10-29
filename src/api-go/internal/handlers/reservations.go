@@ -151,7 +151,7 @@ func (h *Reservations) Create(c *gin.Context) {
 	tx := h.db.MustBegin()
 	var ids []int
 	// Lock eligible rows and pick N
-	if err := tx.Select(&ids, "SELECT id FROM machines WHERE enabled=1 AND online=1 AND reserved=0 ORDER BY id ASC LIMIT ? FOR UPDATE", in.Count); err != nil {
+	if err := tx.Select(&ids, "SELECT id FROM machines WHERE enabled=1 AND online=1 AND reserved=0 AND (quarantine_until IS NULL OR quarantine_until <= UTC_TIMESTAMP()) ORDER BY reserve_fail_count ASC, id ASC LIMIT ? FOR UPDATE", in.Count); err != nil {
 		_ = tx.Rollback()
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "server_error"})
 		return
@@ -243,9 +243,9 @@ func (h *Reservations) Create(c *gin.Context) {
 	}
 
 	if err := cmd.Run(); err != nil {
-		// revert reserved flags on failure
+		// revert reserved flags on failure and apply backoff/quarantine
 		txr := h.db.MustBegin()
-		_, _ = txr.Exec("UPDATE machines SET reserved=0,reserved_by=NULL,reserved_until=NULL WHERE id IN ("+strings.Join(ph, ",")+")", selArgs...)
+		_, _ = txr.Exec("UPDATE machines SET reserved=0,reserved_by=NULL,reserved_until=NULL, reserve_fail_count=reserve_fail_count+1, quarantine_until=DATE_ADD(UTC_TIMESTAMP(), INTERVAL LEAST(60, (reserve_fail_count+1)*5) MINUTE) WHERE id IN ("+strings.Join(ph, ",")+")", selArgs...)
 		_ = txr.Commit()
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "ansible_failed", "details": strings.TrimSpace(stderr.String())})
 		return
