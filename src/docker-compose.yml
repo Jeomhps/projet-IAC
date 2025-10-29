@@ -40,6 +40,16 @@ services:
       - ADMIN_DEFAULT_PASSWORD=${ADMIN_DEFAULT_PASSWORD:-change-me}
 
       - LOG_LEVEL=debug
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -q -O- http://localhost:8080/healthz | grep -q 'ok'",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
     depends_on:
       db:
         condition: service_healthy
@@ -60,6 +70,8 @@ services:
       - LOG_LEVEL=debug
     depends_on:
       db:
+        condition: service_healthy
+      api:
         condition: service_healthy
     stop_signal: SIGTERM
     stop_grace_period: 90s
