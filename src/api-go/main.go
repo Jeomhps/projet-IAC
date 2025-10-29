@@ -4,11 +4,13 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 
 	"github.com/Jeomhps/projet-IAC/api-go/internal/config"
 	"github.com/Jeomhps/projet-IAC/api-go/internal/db"
 	"github.com/Jeomhps/projet-IAC/api-go/internal/handlers"
 	"github.com/Jeomhps/projet-IAC/api-go/internal/middleware"
+	"github.com/Jeomhps/projet-IAC/api-go/internal/runner"
 	"github.com/gin-gonic/gin"
 )
 
@@ -17,10 +19,14 @@ func main() {
 
 	dsn := cfg.DSN()
 	d, err := db.Open(dsn)
-	if err != nil { log.Fatalf("db: %v", err) }
+	if err != nil {
+		log.Fatalf("db: %v", err)
+	}
 	defer d.Close()
 
-	if err := db.EnsureSchema(d); err != nil { log.Fatalf("ensure schema: %v", err) }
+	if err := db.EnsureSchema(d); err != nil {
+		log.Fatalf("ensure schema: %v", err)
+	}
 
 	// Seed default admin (optional)
 	if cfg.AdminDefaultUser != "" && cfg.AdminDefaultPass != "" {
@@ -37,7 +43,16 @@ func main() {
 	authH := handlers.NewAuth(d, cfg.JWTSecret)
 	userH := handlers.NewUsers(d)
 	machH := handlers.NewMachines(d)
-	resH  := handlers.NewReservations(d, cfg.AnsiblePlaybookPath)
+
+	// Configure Ansible forks from env (default: 10)
+	forks := 10
+	if v := os.Getenv("ANSIBLE_FORKS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			forks = n
+		}
+	}
+	pr := runner.PlaybookRunner{Playbook: cfg.AnsiblePlaybookPath, Forks: forks}
+	resH := handlers.NewReservations(d, cfg.AnsiblePlaybookPath, pr)
 
 	// Public
 	r.POST("/auth/login", authH.Login)
@@ -76,7 +91,9 @@ func main() {
 	}
 
 	addr := os.Getenv("ADDR")
-	if addr == "" { addr = ":8080" }
+	if addr == "" {
+		addr = ":8080"
+	}
 	log.Printf("listening on %s", addr)
 	_ = r.Run(addr)
 }

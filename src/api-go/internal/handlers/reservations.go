@@ -14,16 +14,18 @@ import (
 	"time"
 
 	"github.com/Jeomhps/projet-IAC/api-go/internal/db"
+	"github.com/Jeomhps/projet-IAC/api-go/internal/runner"
 	"github.com/gin-gonic/gin"
 )
 
 type Reservations struct {
 	db       *db.DB
 	playbook string
+	runner   runner.PlaybookRunner
 }
 
-func NewReservations(d *db.DB, playbookPath string) *Reservations {
-	return &Reservations{db: d, playbook: playbookPath}
+func NewReservations(d *db.DB, playbookPath string, pr runner.PlaybookRunner) *Reservations {
+	return &Reservations{db: d, playbook: playbookPath, runner: pr}
 }
 
 func (h *Reservations) List(c *gin.Context) {
@@ -145,18 +147,55 @@ func (h *Reservations) Create(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "server_error"})
 		return
 	}
-	// Eligible machines
-	var ms []db.Machine
-	if err := h.db.Select(&ms, "SELECT * FROM machines WHERE enabled=1 AND online=1 AND reserved=0 ORDER BY id ASC"); err != nil {
+	// Reserve-first (transactional) to prevent collisions
+	tx := h.db.MustBegin()
+	var ids []int
+	// Lock eligible rows and pick N
+	if err := tx.Select(&ids, "SELECT id FROM machines WHERE enabled=1 AND online=1 AND reserved=0 ORDER BY id ASC LIMIT ? FOR UPDATE", in.Count); err != nil {
+		_ = tx.Rollback()
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "server_error"})
 		return
 	}
-	if len(ms) < in.Count {
-		c.JSON(http.StatusConflict, gin.H{"error": "not_enough_available", "available": len(ms)})
+	if len(ids) < in.Count {
+		_ = tx.Rollback()
+		c.JSON(http.StatusConflict, gin.H{"error": "not_enough_available", "available": len(ids)})
 		return
 	}
-	reserved := ms[:in.Count]
 	until := time.Now().UTC().Add(time.Duration(in.Duration) * time.Minute)
+
+	// Mark them reserved inside the TX
+	ph := make([]string, len(ids))
+	upArgs := make([]any, 0, 2+len(ids))
+	upArgs = append(upArgs, user, until)
+	for i := range ids {
+		ph[i] = "?"
+		upArgs = append(upArgs, ids[i])
+	}
+	if _, err := tx.Exec("UPDATE machines SET reserved=1,reserved_by=?,reserved_until=? WHERE id IN ("+strings.Join(ph, ",")+") AND reserved=0", upArgs...); err != nil {
+		_ = tx.Rollback()
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "server_error"})
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "server_error"})
+		return
+	}
+
+	// Load the reserved machines to build inventory
+	var reserved []db.Machine
+	selArgs := make([]any, 0, len(ids))
+	for i := range ids {
+		selArgs = append(selArgs, ids[i])
+	}
+	query := "SELECT * FROM machines WHERE id IN (" + strings.Join(ph, ",") + ") ORDER BY id ASC"
+	if err := h.db.Select(&reserved, query, selArgs...); err != nil {
+		// revert reserved flags if we failed to load rows
+		txr := h.db.MustBegin()
+		_, _ = txr.Exec("UPDATE machines SET reserved=0,reserved_by=NULL,reserved_until=NULL WHERE id IN ("+strings.Join(ph, ",")+")", selArgs...)
+		_ = txr.Commit()
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "server_error"})
+		return
+	}
 
 	// Inventory
 	tmp, _ := os.CreateTemp("", "inv-*.ini")
@@ -170,18 +209,26 @@ func (h *Reservations) Create(c *gin.Context) {
 	// Hash password with openssl SHA-512-crypt ($6$)
 	hashed, err := hashSHA512Crypt(in.Password)
 	if err != nil || strings.TrimSpace(hashed) == "" {
+		// revert reserved flags
+		txr := h.db.MustBegin()
+		_, _ = txr.Exec("UPDATE machines SET reserved=0,reserved_by=NULL,reserved_until=NULL WHERE id IN ("+strings.Join(ph, ",")+")", selArgs...)
+		_ = txr.Commit()
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "server_error", "message": "hashing failed"})
 		return
 	}
 
 	level := logLevel()
-	// Build ansible-playbook command
-	args := []string{"-i", tmp.Name(), h.playbook, "--extra-vars",
-		fmt.Sprintf("username=%s hashed_password=%s user_action=create", user, hashed)}
+	args := []string{"ansible-playbook"}
 	if vflags := ansibleVerbosityFlags(level); len(vflags) > 0 {
-		args = append(vflags, args...)
+		args = append(args, vflags...)
 	}
-	cmd := exec.Command("ansible-playbook", args...)
+	args = append(args,
+		"-f", strconv.Itoa(h.runner.Forks),
+		"-i", tmp.Name(),
+		h.playbook,
+		"--extra-vars", fmt.Sprintf("username=%s hashed_password=%s user_action=create", user, hashed),
+	)
+	cmd := exec.Command(args[0], args[1:]...)
 	var stderr bytes.Buffer
 
 	// Stream logs and sanitize inventory in debug/trace modes
@@ -196,20 +243,28 @@ func (h *Reservations) Create(c *gin.Context) {
 	}
 
 	if err := cmd.Run(); err != nil {
+		// revert reserved flags on failure
+		txr := h.db.MustBegin()
+		_, _ = txr.Exec("UPDATE machines SET reserved=0,reserved_by=NULL,reserved_until=NULL WHERE id IN ("+strings.Join(ph, ",")+")", selArgs...)
+		_ = txr.Commit()
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "ansible_failed", "details": strings.TrimSpace(stderr.String())})
 		return
 	}
 
-	// Persist
-	tx := h.db.MustBegin()
+	// Persist reservations (machines already marked reserved)
+	txi := h.db.MustBegin()
 	for _, m := range reserved {
-		tx.MustExec("INSERT INTO reservations (machine_id,user_id,username,reserved_until) VALUES (?,?,?,?)", m.ID, uid, user, until)
-		tx.MustExec("UPDATE machines SET reserved=1,reserved_by=?,reserved_until=? WHERE id=?", user, until, m.ID)
+		txi.MustExec("INSERT INTO reservations (machine_id,user_id,username,reserved_until) VALUES (?,?,?,?)", m.ID, uid, user, until)
 	}
-	if err := tx.Commit(); err != nil {
+	if err := txi.Commit(); err != nil {
+		// rollback reservation flags if insertion fails
+		txr := h.db.MustBegin()
+		_, _ = txr.Exec("UPDATE machines SET reserved=0,reserved_by=NULL,reserved_until=NULL WHERE id IN ("+strings.Join(ph, ",")+")", selArgs...)
+		_ = txr.Commit()
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "server_error"})
 		return
 	}
+
 	out := make([]gin.H, 0, len(reserved))
 	for _, m := range reserved {
 		out = append(out, gin.H{"machine": m.Name, "host": m.Host, "port": m.Port})
@@ -247,29 +302,8 @@ func (h *Reservations) Delete(c *gin.Context) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "forbidden"})
 		return
 	}
-	tmp, _ := os.CreateTemp("", "inv-*.ini")
-	defer os.Remove(tmp.Name())
-	tmp.WriteString(fmt.Sprintf("%s ansible_host=%s ansible_port=%d ansible_user=%s ansible_password=%s\n", x.MName, x.Host, x.Port, x.User, safeInvVal(x.Pass)))
-	tmp.Close()
-
-	level := logLevel()
-	args := []string{"-i", tmp.Name(), h.playbook, "--extra-vars", fmt.Sprintf("username=%s user_action=delete", x.Username)}
-	if vflags := ansibleVerbosityFlags(level); len(vflags) > 0 {
-		args = append(vflags, args...)
-	}
-
-	cmd := exec.Command("ansible-playbook", args...)
-	var stderr bytes.Buffer
-	if streamAnsible(level) {
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = io.MultiWriter(os.Stderr, &stderr)
-		if inv, _ := os.ReadFile(tmp.Name()); len(inv) > 0 {
-			log.Printf("[ansible] inventory (delete):\n%s", sanitizeInventory(string(inv)))
-		}
-	} else {
-		cmd.Stderr = &stderr
-	}
-	_ = cmd.Run() // best-effort
+	// Best-effort delete with standardized runner; logs streamed via runner
+	_ = h.runner.RunDeleteUserSingleHost(c.Request.Context(), x.MName, x.Host, x.Port, x.User, x.Pass, x.Username)
 
 	// Clear DB
 	tx := h.db.MustBegin()
