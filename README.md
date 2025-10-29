@@ -17,6 +17,7 @@ A Docker-first, infrastructure-as-code system to manage a pool of machines/conta
 - [Authentication](#authentication)
 - [API Endpoints](#api-endpoints)
 - [Configuration](#configuration)
+- [Debug](#debugging-ansible-output)
 
 ---
 
@@ -197,3 +198,19 @@ Environment variables (key ones):
   - Listens on 443 and proxies to the API at http://api:8080 (no path prefix)
 
 Production: set strong secrets, use trusted certificates, and tailor timeouts/limits as needed.
+
+## Debugging Ansible output
+
+The API and Scheduler can emit Ansible output to the container logs for easier troubleshooting. This is controlled with the `LOG_LEVEL` environment variable. The default mode is `info` which preserves the existing (concise) logging behavior.
+
+Available levels
+- `info` (default)  
+  Quiet, only error summaries — same behavior as before.
+- `debug`  
+  Streams Ansible stdout/stderr to the container logs (human-readable, no extra `-v` flags). The API will also log the Ansible inventory used, with `ansible_password` values redacted.
+- `trace` (`trace` / `trace1`)  
+  Enables `-v` for `ansible-playbook` (more verbose).
+- `trace2` (`trace2` / `trace-2`)  
+  Enables `-vv` for `ansible-playbook`.
+- `trace3` (`trace3` / `trace-3`)  
+  Enables `-vvv` for `ansible-playbook` (most verbose).
