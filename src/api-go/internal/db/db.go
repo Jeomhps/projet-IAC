@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/jmoiron/sqlx"
 	_ "github.com/go-sql-driver/mysql"
+	"github.com/jmoiron/sqlx"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -52,6 +52,8 @@ func EnsureSchema(db *DB) error {
 			reserved_until DATETIME NULL,
 			enabled BOOLEAN NOT NULL DEFAULT 1,
 			online BOOLEAN NOT NULL DEFAULT 1,
+			reserve_fail_count INT NOT NULL DEFAULT 0,
+			quarantine_until DATETIME NULL,
 			last_seen_at DATETIME NULL
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`,
 		`CREATE TABLE IF NOT EXISTS reservations (
@@ -95,18 +97,20 @@ type User struct {
 }
 
 type Machine struct {
-	ID            int        `db:"id"`
-	Name          string     `db:"name"`
-	Host          string     `db:"host"`
-	Port          int        `db:"port"`
-	User          string     `db:"user"`
-	Password      string     `db:"password"`
-	Reserved      bool       `db:"reserved"`
-	ReservedBy    *string    `db:"reserved_by"`
-	ReservedUntil *time.Time `db:"reserved_until"`
-	Enabled       bool       `db:"enabled"`
-	Online        bool       `db:"online"`
-	LastSeenAt    *time.Time `db:"last_seen_at"`
+	ID               int        `db:"id"`
+	Name             string     `db:"name"`
+	Host             string     `db:"host"`
+	Port             int        `db:"port"`
+	User             string     `db:"user"`
+	Password         string     `db:"password"`
+	Reserved         bool       `db:"reserved"`
+	ReservedBy       *string    `db:"reserved_by"`
+	ReservedUntil    *time.Time `db:"reserved_until"`
+	Enabled          bool       `db:"enabled"`
+	Online           bool       `db:"online"`
+	ReserveFailCount int        `db:"reserve_fail_count"`
+	QuarantineUntil  *time.Time `db:"quarantine_until"`
+	LastSeenAt       *time.Time `db:"last_seen_at"`
 }
 
 type Reservation struct {

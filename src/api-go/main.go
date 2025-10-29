@@ -3,11 +3,13 @@ package main
 import (
 	"log"
 	"net/http"
-	"os"
 
 	"github.com/Jeomhps/projet-IAC/api-go/internal/config"
 	"github.com/Jeomhps/projet-IAC/api-go/internal/db"
-	"github.com/Jeomhps/projet-IAC/api-go/internal/handlers"
+	authh "github.com/Jeomhps/projet-IAC/api-go/internal/handlers/auth"
+	"github.com/Jeomhps/projet-IAC/api-go/internal/handlers/machines"
+	"github.com/Jeomhps/projet-IAC/api-go/internal/handlers/reservations"
+	"github.com/Jeomhps/projet-IAC/api-go/internal/handlers/users"
 	"github.com/Jeomhps/projet-IAC/api-go/internal/middleware"
 	"github.com/gin-gonic/gin"
 )
@@ -17,10 +19,14 @@ func main() {
 
 	dsn := cfg.DSN()
 	d, err := db.Open(dsn)
-	if err != nil { log.Fatalf("db: %v", err) }
+	if err != nil {
+		log.Fatalf("db: %v", err)
+	}
 	defer d.Close()
 
-	if err := db.EnsureSchema(d); err != nil { log.Fatalf("ensure schema: %v", err) }
+	if err := db.EnsureSchema(d); err != nil {
+		log.Fatalf("ensure schema: %v", err)
+	}
 
 	// Seed default admin (optional)
 	if cfg.AdminDefaultUser != "" && cfg.AdminDefaultPass != "" {
@@ -34,10 +40,11 @@ func main() {
 	r.Use(gin.Recovery())
 	r.Use(middleware.RequestLogger())
 
-	authH := handlers.NewAuth(d, cfg.JWTSecret)
-	userH := handlers.NewUsers(d)
-	machH := handlers.NewMachines(d)
-	resH  := handlers.NewReservations(d, cfg.AnsiblePlaybookPath)
+	authH := authh.New(d, cfg.JWTSecret)
+	userH := users.New(d)
+	machH := machines.New(d)
+
+	resH := reservations.NewHandler(d)
 
 	// Public
 	r.POST("/auth/login", authH.Login)
@@ -75,8 +82,7 @@ func main() {
 		auth.DELETE("/reservations/:id", resH.Delete)
 	}
 
-	addr := os.Getenv("ADDR")
-	if addr == "" { addr = ":8080" }
+	addr := ":8080"
 	log.Printf("listening on %s", addr)
 	_ = r.Run(addr)
 }

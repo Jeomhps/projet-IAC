@@ -13,6 +13,7 @@ import (
 	"github.com/Jeomhps/projet-IAC/scheduler-go/internal/cleanup"
 	"github.com/Jeomhps/projet-IAC/scheduler-go/internal/config"
 	"github.com/Jeomhps/projet-IAC/scheduler-go/internal/db"
+	"github.com/Jeomhps/projet-IAC/scheduler-go/internal/health"
 	"github.com/Jeomhps/projet-IAC/scheduler-go/internal/lock"
 	"github.com/Jeomhps/projet-IAC/scheduler-go/internal/runner"
 )
@@ -54,7 +55,7 @@ func main() {
 			DB:        d,
 			Runner:    runner.PlaybookRunner{Playbook: cfg.PlaybookPath, Forks: cfg.Forks},
 			TempDir:   cfg.TempDir,
-			BatchSize: atoi(getenv("CLEANUP_BATCH_SIZE", "20"), 20),
+			BatchSize: cfg.CleanupBatchSize,
 		}
 		n, err := cl.RunOnce(ctx)
 		if err != nil && ctx.Err() == nil {
@@ -65,6 +66,27 @@ func main() {
 			log.Printf("Cleaned up %d expired reservations.", n)
 		} else {
 			log.Printf("No expired reservations to clean up.")
+		}
+		// SSH health check pass
+		a2, err := lock.Acquire(sqlStd, cfg.HealthCheckLockName, cfg.LockTimeout)
+		if err != nil {
+			log.Printf("skip health: %v", err)
+		} else {
+			func() {
+				defer a2.Release()
+				hc := health.Checker{
+					DB:          d,
+					Runner:      runner.PlaybookRunner{Playbook: cfg.PlaybookPath, Forks: cfg.Forks},
+					Concurrency: cfg.HealthCheckConcurrency,
+					Timeout:     time.Duration(cfg.HealthCheckTimeoutSec) * time.Second,
+				}
+				stats, err := hc.RunOnce(ctx)
+				if err != nil && ctx.Err() == nil {
+					log.Printf("health error: %v", err)
+				} else {
+					log.Printf("Health check: machines=%d reachable=%d unreachable=%d disabled=%d re_enabled=%d", stats.Total, stats.Reachable, stats.Unreachable, stats.Disabled, stats.ReEnabled)
+				}
+			}()
 		}
 	}
 

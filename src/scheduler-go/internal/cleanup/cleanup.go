@@ -1,3 +1,5 @@
+// Cleanup module: batch deletes expired reservations via Ansible and applies DB updates per host.
+// KISS: small helpers, clear flow, and idempotent DB updates.
 package cleanup
 
 import (
@@ -12,18 +14,24 @@ import (
 )
 
 type Cleaner struct {
-	DB         *db.DB
-	Runner     runner.PlaybookRunner
-	TempDir    string
-	BatchSize  int
+	DB        *db.DB
+	Runner    runner.PlaybookRunner
+	TempDir   string
+	BatchSize int
 }
 
 func (c Cleaner) RunOnce(ctx context.Context) (int, error) {
-	if ctx.Err() != nil { return 0, ctx.Err() }
+	if ctx.Err() != nil {
+		return 0, ctx.Err()
+	}
 
 	rows, err := db.LoadExpired(c.DB)
-	if err != nil { return 0, err }
-	if len(rows) == 0 { return 0, nil }
+	if err != nil {
+		return 0, err
+	}
+	if len(rows) == 0 {
+		return 0, nil
+	}
 
 	// Group by username
 	byUser := map[string][]db.ExpiredRow{}
@@ -33,31 +41,39 @@ func (c Cleaner) RunOnce(ctx context.Context) (int, error) {
 
 	total := 0
 	for username, items := range byUser {
-		// Process in batches
+		// Process in batches and use Ansible recap to decide per-host outcome
 		for i := 0; i < len(items); i += c.BatchSize {
-			if ctx.Err() != nil { return total, ctx.Err() }
-
+			if ctx.Err() != nil {
+				return total, ctx.Err()
+			}
 			end := i + c.BatchSize
-			if end > len(items) { end = len(items) }
+			if end > len(items) {
+				end = len(items)
+			}
 			chunk := items[i:end]
 
 			inv, err := c.writeInventory(chunk)
-			if err != nil { return total, err }
-			func() {
-				defer os.Remove(inv)
-				_ = c.Runner.RunDeleteUser(ctx, inv, username)
-			}()
-		}
+			if err != nil {
+				return total, err
+			}
 
-		// Clear DB regardless of Ansible result
-		pairs := make([][2]int, 0, len(items))
-		for _, r := range items {
-			pairs = append(pairs, [2]int{r.ResID, r.MID})
+			summary, _ := c.Runner.RunDeleteUserWithSummary(ctx, inv, username)
+			_ = os.Remove(inv)
+
+			// Apply results per host
+			for _, r := range chunk {
+				status := summary[r.Name]
+				if status == "ok" {
+					if err := db.ClearReservationsAndRelease(c.DB, [][2]int{{r.ResID, r.MID}}); err != nil {
+						return total, err
+					}
+					total++
+				} else {
+					// Disable machine on failure for later retry when reachable
+					_ = db.SetMachineEnabled(c.DB, r.MID, false)
+				}
+			}
 		}
-		if err := db.ClearReservationsAndRelease(c.DB, pairs); err != nil {
-			return total, err
-		}
-		total += len(items)
 	}
 
 	return total, nil
@@ -67,13 +83,17 @@ func (c Cleaner) writeInventory(chunk []db.ExpiredRow) (string, error) {
 	ts := time.Now().UnixNano()
 	path := filepath.Join(c.TempDir, fmt.Sprintf("inv-%d.ini", ts))
 	f, err := os.Create(path)
-	if err != nil { return "", err }
+	if err != nil {
+		return "", err
+	}
 	defer f.Close()
 
 	for _, r := range chunk {
 		line := fmt.Sprintf("%s ansible_host=%s ansible_port=%d ansible_user=%s ansible_password=%s\n",
 			r.Name, r.Host, r.Port, r.SSHUser, r.Pass)
-		if _, err := f.WriteString(line); err != nil { return "", err }
+		if _, err := f.WriteString(line); err != nil {
+			return "", err
+		}
 	}
 	return path, nil
 }
