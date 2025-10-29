@@ -4,21 +4,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/Jeomhps/projet-IAC/api-go/internal/db"
 	"github.com/Jeomhps/projet-IAC/api-go/internal/handlers/common"
 	"github.com/gin-gonic/gin"
 )
-
-// Handler exposes reservation-related endpoints in a small, focused type.
-// Keep it simple: hold only what's needed for the specific handlers in this file.
-type Handler struct {
-	db *db.DB
-}
-
-// NewHandler wires a DB into the reservations handler.
-func NewHandler(d *db.DB) *Handler {
-	return &Handler{db: d}
-}
 
 // List returns reservations for the current user.
 // - Admins see all reservations.

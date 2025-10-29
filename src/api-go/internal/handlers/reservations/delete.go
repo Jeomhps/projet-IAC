@@ -9,7 +9,6 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/Jeomhps/projet-IAC/api-go/internal/db"
 	"github.com/gin-gonic/gin"
 )
 
@@ -97,10 +96,4 @@ func (h *Handler) Delete(c *gin.Context) {
 	_ = tx.Commit()
 
 	c.JSON(http.StatusOK, gin.H{"message": "deleted"})
-}
-
-// NewDeleteHandler can be used if only delete functionality is desired.
-// Prefer NewHandler for the full reservations API.
-func NewDeleteHandler(d *db.DB) *Handler {
-	return &Handler{db: d}
 }

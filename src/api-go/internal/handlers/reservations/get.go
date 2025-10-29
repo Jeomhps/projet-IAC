@@ -4,7 +4,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/Jeomhps/projet-IAC/api-go/internal/db"
 	"github.com/Jeomhps/projet-IAC/api-go/internal/handlers/common"
 	"github.com/gin-gonic/gin"
 )
@@ -71,10 +70,4 @@ func (h *Handler) Get(c *gin.Context) {
 		"reserved_until":    common.FormatTimePtr(x.ReservedUntil),
 		"seconds_remaining": sec,
 	})
-}
-
-// NewHandlerWithDB is a small helper for symmetry where needed.
-// Prefer NewHandler unless you need a different wiring pattern.
-func NewHandlerWithDB(d *db.DB) *Handler {
-	return &Handler{db: d}
 }
