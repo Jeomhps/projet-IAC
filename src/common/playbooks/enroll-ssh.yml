@@ -1,0 +1,129 @@
+---
+# Enroll hosts for key-based access:
+# - Generates a controller ED25519 keypair if missing (on localhost = scheduler container)
+# - Creates a privileged user on targets
+# - Installs the controller's public key
+# - Grants passwordless sudo
+#
+# Controller key is stored at {{ local_private_key_file }} and {{ local_private_key_file }}.pub
+# Persist it by bind-mounting ./secrets:/app/secrets (scheduler service).
+
+- name: Enroll host with SSH key and privileged user
+  hosts: all
+  gather_facts: yes
+  become: yes
+
+  vars:
+    # User to create on targets
+    target_user: "iac"
+
+    # Where to keep the controller key inside the scheduler container
+    local_key_dir: "/app/secrets/ssh"
+    local_private_key_file: "{{ local_key_dir }}/scheduler_ed25519"
+
+    # If you want to force a specific public key, set this; otherwise controller key is used
+    enrollment_pubkey: ""
+
+    # Optional extra groups if present on target (will be ensured if they exist)
+    optional_groups:
+      - docker
+
+  pre_tasks:
+    - name: Determine primary sudo group (wheel on Alpine, else sudo)
+      set_fact:
+        sudo_group: "{{ 'wheel' if (ansible_system == 'Linux' and (ansible_os_family == 'Alpine' or ansible_distribution == 'Alpine')) else 'sudo' }}"
+
+    # Controller-side: ensure keypair exists (runs once on the controller = localhost)
+    - name: Ensure key directory exists on controller
+      delegate_to: localhost
+      run_once: true
+      become: false
+      file:
+        path: "{{ local_key_dir }}"
+        state: directory
+        mode: "0700"
+
+    - name: Check if controller private key exists
+      delegate_to: localhost
+      run_once: true
+      become: false
+      stat:
+        path: "{{ local_private_key_file }}"
+      register: controller_key_stat
+
+    - name: Generate controller ED25519 keypair if missing
+      delegate_to: localhost
+      run_once: true
+      become: false
+      command: >
+        ssh-keygen -t ed25519 -N "" -f {{ local_private_key_file }}
+      args:
+        creates: "{{ local_private_key_file }}"
+      when: not controller_key_stat.stat.exists
+
+    - name: Read controller public key
+      delegate_to: localhost
+      run_once: true
+      become: false
+      slurp:
+        src: "{{ local_private_key_file }}.pub"
+      register: controller_pub_slurp
+
+    - name: Set effective public key (use provided enrollment_pubkey if set)
+      run_once: true
+      set_fact:
+        effective_pubkey: >-
+          {{ (enrollment_pubkey | trim) if (enrollment_pubkey | trim | length > 0)
+             else (controller_pub_slurp.content | b64decode | trim) }}
+
+  tasks:
+    - name: Ensure sudo/wheel group exists
+      group:
+        name: "{{ sudo_group }}"
+        state: present
+
+    - name: Ensure optional groups exist when present
+      group:
+        name: "{{ item }}"
+        state: present
+      loop: "{{ optional_groups }}"
+      ignore_errors: true
+
+    - name: Create privileged user
+      user:
+        name: "{{ target_user }}"
+        shell: /bin/sh
+        groups: "{{ [sudo_group] + optional_groups | unique }}"
+        append: true
+        create_home: true
+        state: present
+
+    - name: Ensure .ssh directory
+      file:
+        path: "/home/{{ target_user }}/.ssh"
+        state: directory
+        owner: "{{ target_user }}"
+        group: "{{ target_user }}"
+        mode: "0700"
+
+    - name: Install enrollment public key
+      authorized_key:
+        user: "{{ target_user }}"
+        key: "{{ effective_pubkey }}"
+        state: present
+        manage_dir: false
+
+    - name: Grant passwordless sudo to target_user
+      copy:
+        dest: "/etc/sudoers.d/{{ target_user }}"
+        content: "{{ target_user }} ALL=(ALL) NOPASSWD:ALL\n"
+        owner: root
+        group: root
+        mode: "0440"
+        validate: "visudo -cf %s"
+
+  post_tasks:
+    - name: Display controller private key path (debug)
+      run_once: true
+      debug:
+        msg: "Controller private key for future SSH: {{ local_private_key_file }}"

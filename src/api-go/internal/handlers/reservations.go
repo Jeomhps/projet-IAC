@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -140,14 +141,12 @@ func (h *Reservations) Create(c *gin.Context) {
 	reserved := ms[:in.Count]
 	until := time.Now().UTC().Add(time.Duration(in.Duration) * time.Minute)
 
-	// Inventory
-	tmp, _ := os.CreateTemp("", "inv-*.ini")
-	defer os.Remove(tmp.Name())
-	for _, m := range reserved {
-		tmp.WriteString(m.Name + " ansible_host=" + m.Host + " ansible_port=" + strconv.Itoa(m.Port) +
-			" ansible_user=" + m.User + " ansible_password=" + m.Password + "\n")
+	// Inventory supports both auth modes
+	inv, err := writeInventory(reserved)
+	if err != nil {
+	 c.JSON(http.StatusInternalServerError, gin.H{"error":"inventory_error"}); return
 	}
-	tmp.Close()
+	defer os.Remove(inv)
 
 	// Hash password with openssl SHA-512-crypt ($6$)
 	hashed, err := hashSHA512Crypt(in.Password)
@@ -156,7 +155,7 @@ func (h *Reservations) Create(c *gin.Context) {
 	}
 
 	// Run playbook
-	cmd := exec.Command("ansible-playbook", "-i", tmp.Name(), h.playbook, "--extra-vars",
+	cmd := exec.Command("ansible-playbook", "-i", inv, h.playbook, "--extra-vars",
 		fmt.Sprintf("username=%s hashed_password=%s user_action=create", user, hashed))
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -198,19 +197,33 @@ func (h *Reservations) Delete(c *gin.Context) {
 		Host string `db:"host"`
 		Port int `db:"port"`
 		User string `db:"user"`
-		Pass string `db:"password"`
+		Pass *string `db:"password"`
+		AuthType string `db:"auth_type"`
 	}
 	var x row
-	if err := h.db.Get(&x, `SELECT r.id,r.username,m.id as machine_id,m.name,m.host,m.port,m.user,m.password
+	if err := h.db.Get(&x, `SELECT r.id,r.username,m.id as machine_id,m.name,m.host,m.port,m.user,m.password,m.auth_type
 		FROM reservations r JOIN machines m ON m.id=r.machine_id WHERE r.id=?`, id); err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error":"not_found"}); return
 	}
 	if !isAdmin && x.Username != user {
 		c.JSON(http.StatusForbidden, gin.H{"error":"forbidden"}); return
 	}
+
+	// One-host inventory for deletion
 	tmp, _ := os.CreateTemp("", "inv-*.ini")
 	defer os.Remove(tmp.Name())
-	tmp.WriteString(fmt.Sprintf("%s ansible_host=%s ansible_port=%d ansible_user=%s ansible_password=%s\n", x.MName, x.Host, x.Port, x.User, x.Pass))
+
+	hostUser := x.User
+	if strings.TrimSpace(hostUser) == "" { hostUser = "root" }
+	line := fmt.Sprintf("%s ansible_host=%s ansible_port=%d ansible_user=%s", x.MName, x.Host, x.Port, hostUser)
+	if x.AuthType == "ssh_key" {
+		line += " ansible_ssh_private_key_file=" + escapeInv(getKeyPath())
+	} else {
+		pw := ""
+		if x.Pass != nil { pw = *x.Pass }
+		line += " ansible_password=" + escapeInv(pw)
+	}
+	tmp.WriteString(line + "\n")
 	tmp.Close()
 
 	cmd := exec.Command("ansible-playbook", "-i", tmp.Name(), h.playbook, "--extra-vars", fmt.Sprintf("username=%s user_action=delete", x.Username))
@@ -227,6 +240,15 @@ func (h *Reservations) Delete(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message":"deleted"})
 }
 
+// Helpers
+
+func getKeyPath() string {
+	if v := os.Getenv("SSH_KEY_PRIVATE_FILE"); strings.TrimSpace(v) != "" {
+		return v
+	}
+	return "/app/secrets/ssh/scheduler_ed25519"
+}
+
 // hashSHA512Crypt uses openssl to generate $6$-style SHA-512-crypt hashes.
 func hashSHA512Crypt(password string) (string, error) {
 	cmd := exec.Command("openssl", "passwd", "-6", password)
@@ -236,4 +258,37 @@ func hashSHA512Crypt(password string) (string, error) {
 		return "", fmt.Errorf("openssl: %v: %s", err, errb.String())
 	}
 	return strings.TrimSpace(out.String()), nil
+}
+
+func writeInventory(ms []db.Machine) (string, error) {
+	var b strings.Builder
+	b.WriteString("[targets]\n")
+	for _, m := range ms {
+		hostUser := m.User
+		if strings.TrimSpace(hostUser) == "" { hostUser = "root" }
+		// base
+		b.WriteString(m.Name)
+		b.WriteString(" ansible_host="); b.WriteString(m.Host)
+		b.WriteString(" ansible_port="); b.WriteString(strconv.Itoa(m.Port))
+		b.WriteString(" ansible_user="); b.WriteString(hostUser)
+		// auth based on auth_type
+		if m.AuthType == "ssh_key" {
+			b.WriteString(" ansible_ssh_private_key_file="); b.WriteString(escapeInv(getKeyPath()))
+		} else {
+			pw := ""
+			if m.Password.Valid { pw = m.Password.String }
+			b.WriteString(" ansible_password="); b.WriteString(escapeInv(pw))
+		}
+		b.WriteString("\n")
+	}
+	path := filepath.Join(os.TempDir(), fmt.Sprintf("inv-%d.ini", time.Now().UnixNano()))
+	if err := os.WriteFile(path, []byte(b.String()), 0600); err != nil { return "", err }
+	return path, nil
+}
+
+func escapeInv(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, ` `, `\ `)
+	s = strings.ReplaceAll(s, `=`, `\=`)
+	return s
 }

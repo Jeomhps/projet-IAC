@@ -89,8 +89,9 @@ func (h *Machines) Create(c *gin.Context) {
 	if err := c.ShouldBindJSON(&in); err != nil || in.Name == "" || in.Host == "" || in.User == "" || in.Password == "" || in.Port <= 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error":"invalid_request"}); return
 	}
+	// IMPORTANT: new machines start disabled (enabled=0). Scheduler will enroll and flip them on success.
 	if _, err := h.db.Exec(`INSERT INTO machines (name,host,port,user,password,reserved,reserved_by,reserved_until,enabled,online)
-		VALUES (?,?,?,?,?,0,NULL,NULL,1,1)`, in.Name, in.Host, in.Port, in.User, in.Password); err != nil {
+		VALUES (?,?,?,?,?,0,NULL,NULL,0,1)`, in.Name, in.Host, in.Port, in.User, in.Password); err != nil {
 		c.JSON(http.StatusConflict, gin.H{"error":"conflict","message":"Machine exists"}); return
 	}
 	var m db.Machine

@@ -13,6 +13,7 @@ import (
 	"github.com/Jeomhps/projet-IAC/scheduler-go/internal/cleanup"
 	"github.com/Jeomhps/projet-IAC/scheduler-go/internal/config"
 	"github.com/Jeomhps/projet-IAC/scheduler-go/internal/db"
+	"github.com/Jeomhps/projet-IAC/scheduler-go/internal/enroll"
 	"github.com/Jeomhps/projet-IAC/scheduler-go/internal/lock"
 	"github.com/Jeomhps/projet-IAC/scheduler-go/internal/runner"
 )
@@ -20,7 +21,7 @@ import (
 func main() {
 	cfg := config.Load()
 
-	once := flag.Bool("once", false, "Run cleanup once and exit")
+	once := flag.Bool("once", false, "Run maintenance once and exit")
 	interval := flag.Int("interval", cfg.IntervalSec, "Loop interval in seconds")
 	flag.Parse()
 	if *once {
@@ -37,15 +38,26 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	run := func() {
-		sqlStd := d.DB.DB
-		a, err := lock.Acquire(sqlStd, cfg.LockName, cfg.LockTimeout)
-		if err != nil {
-			log.Printf("skip run: %v", err)
+	doEnroll := func(ctx context.Context) {
+		s := enroll.Service{
+			DB:                d.DB.DB,
+			PlaybookPath:      cfg.EnrollPlaybookPath,
+			ControllerKeyPath: cfg.EnrollKeyPrivatePath,
+			TargetUser:        cfg.EnrollTargetUser,
+			Forks:             cfg.Forks,
+			TempDir:           cfg.TempDir,
+		}
+		n, err := s.Run(ctx)
+		if err != nil && ctx.Err() == nil {
+			log.Printf("enroll error: %v", err)
 			return
 		}
-		defer a.Release()
+		if n > 0 {
+			log.Printf("Enrolled %d machine(s).", n)
+		}
+	}
 
+	doCleanup := func(ctx context.Context) {
 		cl := cleanup.Cleaner{
 			DB:        d,
 			Runner:    runner.PlaybookRunner{Playbook: cfg.PlaybookPath, Forks: cfg.Forks},
@@ -62,6 +74,20 @@ func main() {
 		} else {
 			log.Printf("No expired reservations to clean up.")
 		}
+	}
+
+	run := func() {
+		sqlStd := d.DB.DB
+		a, err := lock.Acquire(sqlStd, cfg.LockName, cfg.LockTimeout)
+		if err != nil {
+			log.Printf("skip run: %v", err)
+			return
+		}
+		defer a.Release()
+
+		// Enrollment first, then cleanup
+		doEnroll(ctx)
+		doCleanup(ctx)
 	}
 
 	if cfg.Once {

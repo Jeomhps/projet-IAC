@@ -9,15 +9,15 @@ import (
 )
 
 type Config struct {
-	DBHost        string
-	DBPort        string
-	DBName        string
-	DBUser        string
-	DBPassword    string
-	DBCharset     string
-	DBCollation   string
-	DBTimeout     string
-	DBReadTimeout string
+	DBHost         string
+	DBPort         string
+	DBName         string
+	DBUser         string
+	DBPassword     string
+	DBCharset      string
+	DBCollation    string
+	DBTimeout      string
+	DBReadTimeout  string
 	DBWriteTimeout string
 
 	IntervalSec int
@@ -28,6 +28,12 @@ type Config struct {
 	PlaybookPath string
 	Forks        int
 	TempDir      string
+
+	// Enrollment
+	EnrollPlaybookPath   string // /app/playbooks/enroll-ssh.yml
+	EnrollTargetUser     string // iac
+	EnrollKeyPrivatePath string // /app/secrets/ssh/scheduler_ed25519
+	DisableLock          bool
 }
 
 func Load() Config {
@@ -51,6 +57,11 @@ func Load() Config {
 		PlaybookPath: getenv("ANSIBLE_PLAYBOOK", "/app/playbooks/create-users.yml"),
 		Forks:        atoi(getenv("ANSIBLE_FORKS", "5"), 5),
 		TempDir:      defaultTmpDir(),
+
+		EnrollPlaybookPath:   getenv("ENROLL_PLAYBOOK", "/app/playbooks/enroll-ssh.yml"),
+		EnrollTargetUser:     getenv("ENROLL_TARGET_USER", "iac"),
+		EnrollKeyPrivatePath: getenv("ENROLL_KEY_PRIVATE_FILE", "/app/secrets/ssh/scheduler_ed25519"),
+		DisableLock:          envBool("SCHEDULER_DISABLE_LOCK", false),
 	}
 }
 
@@ -87,6 +98,21 @@ func atoi(s string, def int) int {
 		return def
 	}
 	return v
+}
+
+func envBool(k string, def bool) bool {
+	v := os.Getenv(k)
+	if v == "" {
+		return def
+	}
+	switch v {
+	case "1", "true", "yes", "on", "TRUE", "True":
+		return true
+	case "0", "false", "no", "off", "FALSE", "False":
+		return false
+	default:
+		return def
+	}
 }
 
 func defaultTmpDir() string {

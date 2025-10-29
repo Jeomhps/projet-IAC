@@ -48,6 +48,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    volumes:
+      - ./secrets:/app/secrets:ro
     networks:
       - lab
 
@@ -72,6 +74,8 @@ services:
     stop_signal: SIGTERM
     stop_grace_period: 90s
     restart: unless-stopped
+    volumes:
+      - ./secrets:/app/secrets:rw
     networks:
       - lab
 
