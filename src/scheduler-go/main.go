@@ -83,7 +83,7 @@ func main() {
 				if err != nil && ctx.Err() == nil {
 					log.Printf("health error: %v", err)
 				} else {
-					log.Printf("Health check: machines=%d reachable=%d unreachable=%d disabled=%d", stats.Total, stats.Reachable, stats.Unreachable, stats.Disabled)
+					log.Printf("Health check: machines=%d reachable=%d unreachable=%d disabled=%d re_enabled=%d", stats.Total, stats.Reachable, stats.Unreachable, stats.Disabled, stats.ReEnabled)
 				}
 			}()
 		}

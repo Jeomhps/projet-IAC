@@ -16,6 +16,7 @@ import (
 // Checker performs SSH reachability checks against registered machines
 // and updates DB fields accordingly.
 // - If a machine is reachable via SSH: updates last_seen_at to current UTC.
+// - If a previously disabled machine becomes reachable: sets enabled=true.
 // - If a machine is NOT reachable via SSH: sets enabled=false.
 // Concurrency and per-host timeouts are configurable.
 type Checker struct {
@@ -30,11 +31,12 @@ type Stats struct {
 	Reachable   int // SSH connected successfully
 	Unreachable int // SSH failed
 	Disabled    int // how many machines were disabled (enabled->false) during this run
+	ReEnabled   int // how many machines were re-enabled (enabled->true) during this run
 }
 
 // RunOnce executes an SSH health check pass for all machines.
 // It respects context cancellation. On success/failure it updates the DB:
-// - Success: TouchMachineLastSeen
+// - Success: TouchMachineLastSeen and SetMachineEnabled(..., true) if it was disabled
 // - Failure: SetMachineEnabled(..., false)
 func (c Checker) RunOnce(ctx context.Context) (Stats, error) {
 	var stats Stats
@@ -65,6 +67,7 @@ func (c Checker) RunOnce(ctx context.Context) (Stats, error) {
 	var reachable int32
 	var unreachable int32
 	var disabled int32
+	var reenabled int32
 	var total int32
 
 	worker := func() {
@@ -77,6 +80,17 @@ func (c Checker) RunOnce(ctx context.Context) (Stats, error) {
 
 			ok := trySSH(ctx, m, to)
 			if ok {
+				// On success: update last_seen_at and re-enable if needed
+				if err := db.TouchMachineLastSeen(c.DB, m.ID); err != nil {
+					log.Printf("health: touch last_seen_at failed for %s (%s:%d): %v", m.Name, m.Host, m.Port, err)
+				}
+				if !m.Enabled {
+					if err := db.SetMachineEnabled(c.DB, m.ID, true); err != nil {
+						log.Printf("health: set enabled=true failed for %s (%s:%d): %v", m.Name, m.Host, m.Port, err)
+					} else {
+						atomic.AddInt32(&reenabled, 1)
+					}
+				}
 				atomic.AddInt32(&reachable, 1)
 			} else {
 				// On failure: disable machine
@@ -114,6 +128,7 @@ func (c Checker) RunOnce(ctx context.Context) (Stats, error) {
 	stats.Reachable = int(atomic.LoadInt32(&reachable))
 	stats.Unreachable = int(atomic.LoadInt32(&unreachable))
 	stats.Disabled = int(atomic.LoadInt32(&disabled))
+	stats.ReEnabled = int(atomic.LoadInt32(&reenabled))
 	return stats, nil
 }
 
