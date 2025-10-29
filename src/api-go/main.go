@@ -3,14 +3,14 @@ package main
 import (
 	"log"
 	"net/http"
-	"os"
-	"strconv"
 
 	"github.com/Jeomhps/projet-IAC/api-go/internal/config"
 	"github.com/Jeomhps/projet-IAC/api-go/internal/db"
-	"github.com/Jeomhps/projet-IAC/api-go/internal/handlers"
+	authh "github.com/Jeomhps/projet-IAC/api-go/internal/handlers/auth"
+	"github.com/Jeomhps/projet-IAC/api-go/internal/handlers/machines"
+	"github.com/Jeomhps/projet-IAC/api-go/internal/handlers/reservations"
+	"github.com/Jeomhps/projet-IAC/api-go/internal/handlers/users"
 	"github.com/Jeomhps/projet-IAC/api-go/internal/middleware"
-	"github.com/Jeomhps/projet-IAC/api-go/internal/runner"
 	"github.com/gin-gonic/gin"
 )
 
@@ -40,19 +40,11 @@ func main() {
 	r.Use(gin.Recovery())
 	r.Use(middleware.RequestLogger())
 
-	authH := handlers.NewAuth(d, cfg.JWTSecret)
-	userH := handlers.NewUsers(d)
-	machH := handlers.NewMachines(d)
+	authH := authh.New(d, cfg.JWTSecret)
+	userH := users.New(d)
+	machH := machines.New(d)
 
-	// Configure Ansible forks from env (default: 10)
-	forks := 10
-	if v := os.Getenv("ANSIBLE_FORKS"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			forks = n
-		}
-	}
-	pr := runner.PlaybookRunner{Playbook: cfg.AnsiblePlaybookPath, Forks: forks}
-	resH := handlers.NewReservations(d, cfg.AnsiblePlaybookPath, pr)
+	resH := reservations.NewHandler(d)
 
 	// Public
 	r.POST("/auth/login", authH.Login)
@@ -90,10 +82,7 @@ func main() {
 		auth.DELETE("/reservations/:id", resH.Delete)
 	}
 
-	addr := os.Getenv("ADDR")
-	if addr == "" {
-		addr = ":8080"
-	}
+	addr := ":8080"
 	log.Printf("listening on %s", addr)
 	_ = r.Run(addr)
 }

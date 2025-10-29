@@ -1,3 +1,5 @@
+// Cleanup module: batch deletes expired reservations via Ansible and applies DB updates per host.
+// KISS: small helpers, clear flow, and idempotent DB updates.
 package cleanup
 
 import (

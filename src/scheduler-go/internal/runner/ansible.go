@@ -1,3 +1,5 @@
+// Runner wraps ansible-playbook invocations with consistent flags, logging, and parsing.
+// KISS principle: small helpers, clear responsibilities, no shared mutable state.
 package runner
 
 import (

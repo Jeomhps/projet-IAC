@@ -1,3 +1,8 @@
+// Health module: simple, focused, and well-documented.
+// - Performs SSH reachability checks.
+// - Updates DB flags (enabled) and timestamps (last_seen_at).
+// - Triggers opportunistic cleanup when a machine comes back online.
+// Keep it KISS: small helpers, clear control flow, and idempotent DB updates.
 package health
 
 import (
@@ -14,12 +19,13 @@ import (
 	"github.com/Jeomhps/projet-IAC/scheduler-go/internal/runner"
 )
 
-// Checker performs SSH reachability checks against registered machines
-// and updates DB fields accordingly.
-// - If a machine is reachable via SSH: updates last_seen_at to current UTC.
-// - If a previously disabled machine becomes reachable: sets enabled=true.
-// - If a machine is NOT reachable via SSH: sets enabled=false.
-// Concurrency and per-host timeouts are configurable.
+// Checker performs SSH reachability checks against registered machines and updates DB fields.
+// Behavior:
+// - Success: update last_seen_at; if it was disabled, enable it and attempt opportunistic cleanup.
+// - Failure: set enabled=false to hide it from users and avoid useless retries until it recovers.
+// Notes:
+// - Concurrency and per-host timeouts are configurable.
+// - All DB operations are idempotent to handle races safely.
 type Checker struct {
 	DB          *db.DB
 	Runner      runner.PlaybookRunner
@@ -28,12 +34,13 @@ type Checker struct {
 }
 
 // Stats summarizes one run of the health check.
+// Keep fields human-friendly for easy logging and dashboards.
 type Stats struct {
 	Total       int // total machines processed
 	Reachable   int // SSH connected successfully
 	Unreachable int // SSH failed
-	Disabled    int // how many machines were disabled (enabled->false) during this run
-	ReEnabled   int // how many machines were re-enabled (enabled->true) during this run
+	Disabled    int // machines disabled (enabled->false) during this run
+	ReEnabled   int // machines re-enabled (enabled->true) during this run
 }
 
 // RunOnce executes an SSH health check pass for all machines.
@@ -54,6 +61,7 @@ func (c Checker) RunOnce(ctx context.Context) (Stats, error) {
 		return stats, nil
 	}
 
+	// Use safe defaults to keep behavior predictable when unset.
 	cc := c.Concurrency
 	if cc <= 0 {
 		cc = 10
@@ -72,6 +80,8 @@ func (c Checker) RunOnce(ctx context.Context) (Stats, error) {
 	var reenabled int32
 	var total int32
 
+	// Worker: probes hosts and applies DB side-effects based on the outcome.
+	// Idempotent writes and context checks keep this robust and easy to reason about.
 	worker := func() {
 		defer wg.Done()
 		for m := range jobs {
@@ -86,6 +96,7 @@ func (c Checker) RunOnce(ctx context.Context) (Stats, error) {
 				if err := db.TouchMachineLastSeen(c.DB, m.ID); err != nil {
 					log.Printf("health: touch last_seen_at failed for %s (%s:%d): %v", m.Name, m.Host, m.Port, err)
 				}
+				// Only count as re-enabled if the DB row actually changed (prevents overcounting).
 				if changed, err := db.EnableIfDisabled(c.DB, m.ID); err != nil {
 					log.Printf("health: set enabled=true failed for %s (%s:%d): %v", m.Name, m.Host, m.Port, err)
 				} else if changed {
@@ -136,10 +147,11 @@ func (c Checker) RunOnce(ctx context.Context) (Stats, error) {
 	return stats, nil
 }
 
-// trySSH attempts to establish an SSH connection with the machine using
-// password authentication. It accepts any host key (insecure) because this
-// is a health probe task, not a trust-establishing step.
-// Returns true on successful SSH handshake+authentication, false otherwise.
+// trySSH returns true if we can establish an SSH connection using password auth.
+// Implementation notes:
+// - Uses sshpass + ssh to avoid bringing extra crypto deps; this aligns with the container toolchain.
+// - Host key checking is disabled intentionally (health probe, not trust establishment).
+// - Respects per-host timeout via context.
 func trySSH(ctx context.Context, m db.MachineRow, timeout time.Duration) bool {
 	addr := fmt.Sprintf("%s@%s", m.SSHUser, m.Host)
 
@@ -169,8 +181,9 @@ func trySSH(ctx context.Context, m db.MachineRow, timeout time.Duration) bool {
 	return true
 }
 
-// opportunisticCleanup attempts to delete expired reservation users on a machine
-// that just became reachable again, and then clears the reservations in DB.
+// opportunisticCleanup deletes expired reservation users for a machine that just came back.
+// KISS: best-effort per-host deletes with idempotent DB clears on success.
+// If Ansible fails, leave the reservation; regular cleanup will retry later.
 func opportunisticCleanup(ctx context.Context, d *db.DB, pr runner.PlaybookRunner, m db.MachineRow) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
