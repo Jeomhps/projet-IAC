@@ -15,7 +15,7 @@ import (
 
 // Checker performs SSH reachability checks against registered machines
 // and updates DB fields accordingly.
-// - Always updates last_seen_at to current UTC.
+// - If a machine is reachable via SSH: updates last_seen_at to current UTC.
 // - If a machine is NOT reachable via SSH: sets enabled=false.
 // Concurrency and per-host timeouts are configurable.
 type Checker struct {
@@ -34,7 +34,7 @@ type Stats struct {
 
 // RunOnce executes an SSH health check pass for all machines.
 // It respects context cancellation. On success/failure it updates the DB:
-// - Always: TouchMachineLastSeen
+// - Success: TouchMachineLastSeen
 // - Failure: SetMachineEnabled(..., false)
 func (c Checker) RunOnce(ctx context.Context) (Stats, error) {
 	var stats Stats
@@ -74,11 +74,6 @@ func (c Checker) RunOnce(ctx context.Context) (Stats, error) {
 				return
 			}
 			atomic.AddInt32(&total, 1)
-
-			// Always record last check time
-			if err := db.TouchMachineLastSeen(c.DB, m.ID); err != nil {
-				log.Printf("health: touch last_seen_at failed for %s (%s:%d): %v", m.Name, m.Host, m.Port, err)
-			}
 
 			ok := trySSH(ctx, m, to)
 			if ok {
