@@ -43,7 +43,7 @@ register-machine:
 run count="10" password="test":
     just provision {{count}} {{password}}
     just docker-up
-    sleep 1
+    sleep 2
     just register-machine
 
 # Teardown and cleanup
