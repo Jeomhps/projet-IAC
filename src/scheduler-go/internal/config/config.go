@@ -9,15 +9,15 @@ import (
 )
 
 type Config struct {
-	DBHost        string
-	DBPort        string
-	DBName        string
-	DBUser        string
-	DBPassword    string
-	DBCharset     string
-	DBCollation   string
-	DBTimeout     string
-	DBReadTimeout string
+	DBHost         string
+	DBPort         string
+	DBName         string
+	DBUser         string
+	DBPassword     string
+	DBCharset      string
+	DBCollation    string
+	DBTimeout      string
+	DBReadTimeout  string
 	DBWriteTimeout string
 
 	IntervalSec int
@@ -25,9 +25,12 @@ type Config struct {
 	LockName    string
 	LockTimeout int
 
-	PlaybookPath string
-	Forks        int
-	TempDir      string
+	PlaybookPath           string
+	Forks                  int
+	TempDir                string
+	HealthCheckConcurrency int
+	HealthCheckTimeoutSec  int
+	HealthCheckLockName    string
 }
 
 func Load() Config {
@@ -48,9 +51,12 @@ func Load() Config {
 		LockName:    getenv("SCHEDULER_LOCK_NAME", "reservation-expiry-cleanup"),
 		LockTimeout: atoi(getenv("DB_LOCK_TIMEOUT", "0"), 0),
 
-		PlaybookPath: getenv("ANSIBLE_PLAYBOOK", "/app/playbooks/create-users.yml"),
-		Forks:        atoi(getenv("ANSIBLE_FORKS", "5"), 5),
-		TempDir:      defaultTmpDir(),
+		PlaybookPath:           getenv("ANSIBLE_PLAYBOOK", "/app/playbooks/create-users.yml"),
+		Forks:                  atoi(getenv("ANSIBLE_FORKS", "5"), 5),
+		TempDir:                defaultTmpDir(),
+		HealthCheckConcurrency: atoi(getenv("SSH_HEALTH_CONCURRENCY", "20"), 20),
+		HealthCheckTimeoutSec:  atoi(getenv("SSH_HEALTH_TIMEOUT", "10"), 10),
+		HealthCheckLockName:    getenv("SSH_HEALTH_LOCK_NAME", "ssh-health-check"),
 	}
 }
 

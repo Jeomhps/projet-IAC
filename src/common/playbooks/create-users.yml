@@ -1,7 +1,7 @@
 ---
 - name: Manage user in Alpine Docker containers
   hosts: all
-  become: yes
+  become: true
   tasks:
     - name: Create user
       ansible.builtin.user:
