@@ -47,6 +47,7 @@ FROM reservations r
 JOIN machines m ON m.id = r.machine_id
 WHERE r.reserved_until IS NOT NULL
   AND r.reserved_until <= UTC_TIMESTAMP()
+  AND m.enabled=1
 ORDER BY r.username ASC, r.id ASC`
 	var rows []ExpiredRow
 	if err := d.Select(&rows, q); err != nil {
