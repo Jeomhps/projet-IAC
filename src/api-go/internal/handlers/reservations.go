@@ -3,9 +3,12 @@ package handlers
 import (
 	"bytes"
 	"fmt"
+	"io"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -145,7 +148,7 @@ func (h *Reservations) Create(c *gin.Context) {
 	defer os.Remove(tmp.Name())
 	for _, m := range reserved {
 		tmp.WriteString(m.Name + " ansible_host=" + m.Host + " ansible_port=" + strconv.Itoa(m.Port) +
-			" ansible_user=" + m.User + " ansible_password=" + m.Password + "\n")
+			" ansible_user=" + m.User + " ansible_password=" + safeInvVal(m.Password) + "\n")
 	}
 	tmp.Close()
 
@@ -155,13 +158,29 @@ func (h *Reservations) Create(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error":"server_error","message":"hashing failed"}); return
 	}
 
-	// Run playbook
-	cmd := exec.Command("ansible-playbook", "-i", tmp.Name(), h.playbook, "--extra-vars",
-		fmt.Sprintf("username=%s hashed_password=%s user_action=create", user, hashed))
+	level := logLevel()
+	// Build ansible-playbook command
+	args := []string{"-i", tmp.Name(), h.playbook, "--extra-vars",
+		fmt.Sprintf("username=%s hashed_password=%s user_action=create", user, hashed)}
+	if vflags := ansibleVerbosityFlags(level); len(vflags) > 0 {
+		args = append(vflags, args...)
+	}
+	cmd := exec.Command("ansible-playbook", args...)
 	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
+
+	// Stream logs and sanitize inventory in debug/trace modes
+	if streamAnsible(level) {
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = io.MultiWriter(os.Stderr, &stderr)
+		if inv, _ := os.ReadFile(tmp.Name()); len(inv) > 0 {
+			log.Printf("[ansible] inventory (create):\n%s", sanitizeInventory(string(inv)))
+		}
+	} else {
+		cmd.Stderr = &stderr
+	}
+
 	if err := cmd.Run(); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error":"ansible_failed","details": stderr.String()}); return
+		c.JSON(http.StatusInternalServerError, gin.H{"error":"ansible_failed","details": strings.TrimSpace(stderr.String())}); return
 	}
 
 	// Persist
@@ -210,12 +229,26 @@ func (h *Reservations) Delete(c *gin.Context) {
 	}
 	tmp, _ := os.CreateTemp("", "inv-*.ini")
 	defer os.Remove(tmp.Name())
-	tmp.WriteString(fmt.Sprintf("%s ansible_host=%s ansible_port=%d ansible_user=%s ansible_password=%s\n", x.MName, x.Host, x.Port, x.User, x.Pass))
+	tmp.WriteString(fmt.Sprintf("%s ansible_host=%s ansible_port=%d ansible_user=%s ansible_password=%s\n", x.MName, x.Host, x.Port, x.User, safeInvVal(x.Pass)))
 	tmp.Close()
 
-	cmd := exec.Command("ansible-playbook", "-i", tmp.Name(), h.playbook, "--extra-vars", fmt.Sprintf("username=%s user_action=delete", x.Username))
+	level := logLevel()
+	args := []string{"-i", tmp.Name(), h.playbook, "--extra-vars", fmt.Sprintf("username=%s user_action=delete", x.Username)}
+	if vflags := ansibleVerbosityFlags(level); len(vflags) > 0 {
+		args = append(vflags, args...)
+	}
+
+	cmd := exec.Command("ansible-playbook", args...)
 	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
+	if streamAnsible(level) {
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = io.MultiWriter(os.Stderr, &stderr)
+		if inv, _ := os.ReadFile(tmp.Name()); len(inv) > 0 {
+			log.Printf("[ansible] inventory (delete):\n%s", sanitizeInventory(string(inv)))
+		}
+	} else {
+		cmd.Stderr = &stderr
+	}
 	_ = cmd.Run() // best-effort
 
 	// Clear DB
@@ -226,6 +259,51 @@ func (h *Reservations) Delete(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{"message":"deleted"})
 }
+
+func safeInvVal(s string) string {
+	// escape spaces, equals, and backslashes for INI-like inventory
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, ` `, `\ `)
+	s = strings.ReplaceAll(s, `=`, `\=`)
+	return s
+}
+
+// ---- Logging helpers ----
+
+func logLevel() string {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv("LOG_LEVEL")))
+	if v == "" {
+		return "info"
+	}
+	return v
+}
+
+func streamAnsible(level string) bool {
+	// Stream stdout/stderr for debug and all trace levels
+	return level == "debug" || strings.HasPrefix(level, "trace")
+}
+
+func ansibleVerbosityFlags(level string) []string {
+	switch level {
+	case "trace3", "trace-3":
+		return []string{"-vvv"}
+	case "trace2", "trace-2":
+		return []string{"-vv"}
+	case "trace", "trace1", "trace-1":
+		return []string{"-v"}
+	default: // info, debug
+		return nil
+	}
+}
+
+var rePass = regexp.MustCompile(`(?m)(ansible_password=)(\S+)`)
+
+func sanitizeInventory(s string) string {
+	// redact ansible_password values in logged inventory
+	return rePass.ReplaceAllString(s, "${1}***")
+}
+
+// ---- Crypto helper (unchanged) ----
 
 // hashSHA512Crypt uses openssl to generate $6$-style SHA-512-crypt hashes.
 func hashSHA512Crypt(password string) (string, error) {

@@ -28,6 +28,10 @@ func main() {
 	}
 	cfg.IntervalSec = *interval
 
+	// Configure Ansible verbosity via env based on LOG_LEVEL
+	level := logLevel()
+	setAnsibleEnvForLevel(level)
+
 	d, err := db.Open(cfg.DSN())
 	if err != nil {
 		log.Fatalf("db open: %v", err)
@@ -97,4 +101,38 @@ func atoi(s string, def int) int {
 		return def
 	}
 	return v
+}
+
+// ---- Logging helpers ----
+
+func logLevel() string {
+	v := os.Getenv("LOG_LEVEL")
+	if v == "" {
+		return "info"
+	}
+	return v
+}
+
+func setAnsibleEnvForLevel(level string) {
+	// Always keep color if logs support it
+	_ = os.Setenv("ANSIBLE_FORCE_COLOR", "1")
+
+	switch level {
+	case "trace3", "trace-3":
+		_ = os.Setenv("ANSIBLE_VERBOSITY", "3")
+		log.Printf("LOG_LEVEL=%s -> ANSIBLE_VERBOSITY=3", level)
+	case "trace2", "trace-2":
+		_ = os.Setenv("ANSIBLE_VERBOSITY", "2")
+		log.Printf("LOG_LEVEL=%s -> ANSIBLE_VERBOSITY=2", level)
+	case "trace", "trace1", "trace-1":
+		_ = os.Setenv("ANSIBLE_VERBOSITY", "1")
+		log.Printf("LOG_LEVEL=%s -> ANSIBLE_VERBOSITY=1", level)
+	case "debug":
+		// concise default output, but ensure colored human-friendly formatter
+		// leave verbosity unset to avoid -v noise
+		_ = os.Setenv("ANSIBLE_STDOUT_CALLBACK", "yaml")
+		log.Printf("LOG_LEVEL=debug -> human-readable Ansible output (no extra verbosity)")
+	default: // info
+		// no extra env; Ansible defaults
+	}
 }
