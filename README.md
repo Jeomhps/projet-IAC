@@ -176,23 +176,29 @@ curl -k -H "Authorization: Bearer $TOKEN" https://localhost/reservations
 
 ## Configuration
 
-Environment variables (key ones):
+Environment variables (concise options summary):
 
 - API (Go, Gin)
-  - DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD
-  - DB_CHARSET (default: utf8mb4), DB_COLLATION (default: utf8mb4_unicode_ci)
-  - DB_TIMEOUT (default: 5s), DB_READ_TIMEOUT (default: 5s), DB_WRITE_TIMEOUT (default: 5s)
-  - JWT_SECRET
-  - ADMIN_DEFAULT_USERNAME, ADMIN_DEFAULT_PASSWORD
-  - ANSIBLE_PLAYBOOK (default: /app/playbooks/create-users.yml)
-  - ANSIBLE_FORKS (optional; used when invoking Ansible)
+  - DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD — database connection settings.
+  - DB_CHARSET, DB_COLLATION — defaults: utf8mb4 / utf8mb4_unicode_ci.
+  - DB_TIMEOUT, DB_READ_TIMEOUT, DB_WRITE_TIMEOUT — defaults: 5s each.
+  - JWT_SECRET — HMAC key for JWT signing.
+  - ADMIN_DEFAULT_USERNAME, ADMIN_DEFAULT_PASSWORD — bootstrap admin credentials on first run.
+  - ANSIBLE_PLAYBOOK — path to the playbook (default: /app/playbooks/create-users.yml).
+  - ANSIBLE_FORKS — optional; controls forks when the API invokes Ansible. If unset, sensible defaults are used by code.
+  - LOG_LEVEL — info (default), debug, trace, trace2, trace3; controls Ansible verbosity and log streaming.
 
 - Scheduler (Go)
-  - Same DB_* variables as the API
-  - SCHEDULER_INTERVAL (seconds; default: 60)
-  - CLEANUP_BATCH_SIZE (default: 20)
-  - ANSIBLE_FORKS (default: 5)
-  - DB_LOCK_TIMEOUT (seconds; 0 = try-lock, no wait)
+  - Same DB_* variables as the API.
+  - SCHEDULER_INTERVAL — seconds between maintenance loop iterations (default: 60).
+  - CLEANUP_BATCH_SIZE — hosts per Ansible run during cleanup (default: 20; loaded via scheduler config).
+  - ANSIBLE_PLAYBOOK — path to the playbook (default: /app/playbooks/create-users.yml).
+  - ANSIBLE_FORKS — Ansible parallelism for scheduler playbooks (default: 5).
+  - DB_LOCK_TIMEOUT — seconds; 0 = try-lock/no wait (optional).
+  - SSH_HEALTH_CONCURRENCY — max concurrent SSH health probes (default: 20).
+  - SSH_HEALTH_TIMEOUT — per-host SSH timeout in seconds (default: 10).
+  - SSH_HEALTH_LOCK_NAME — advisory lock name for health pass (default: ssh-health-check).
+  - LOG_LEVEL — same behavior as API.
 
 - Reverse proxy (Caddy)
   - Listens on 443 and proxies to the API at http://api:8080 (no path prefix)

@@ -55,7 +55,7 @@ func main() {
 			DB:        d,
 			Runner:    runner.PlaybookRunner{Playbook: cfg.PlaybookPath, Forks: cfg.Forks},
 			TempDir:   cfg.TempDir,
-			BatchSize: atoi(getenv("CLEANUP_BATCH_SIZE", "20"), 20),
+			BatchSize: cfg.CleanupBatchSize,
 		}
 		n, err := cl.RunOnce(ctx)
 		if err != nil && ctx.Err() == nil {

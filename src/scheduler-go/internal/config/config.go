@@ -28,6 +28,7 @@ type Config struct {
 	PlaybookPath           string
 	Forks                  int
 	TempDir                string
+	CleanupBatchSize       int
 	HealthCheckConcurrency int
 	HealthCheckTimeoutSec  int
 	HealthCheckLockName    string
@@ -54,6 +55,7 @@ func Load() Config {
 		PlaybookPath:           getenv("ANSIBLE_PLAYBOOK", "/app/playbooks/create-users.yml"),
 		Forks:                  atoi(getenv("ANSIBLE_FORKS", "5"), 5),
 		TempDir:                defaultTmpDir(),
+		CleanupBatchSize:       atoi(getenv("CLEANUP_BATCH_SIZE", "20"), 20),
 		HealthCheckConcurrency: atoi(getenv("SSH_HEALTH_CONCURRENCY", "20"), 20),
 		HealthCheckTimeoutSec:  atoi(getenv("SSH_HEALTH_TIMEOUT", "10"), 10),
 		HealthCheckLockName:    getenv("SSH_HEALTH_LOCK_NAME", "ssh-health-check"),

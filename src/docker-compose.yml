@@ -7,7 +7,11 @@ services:
       - MARIADB_PASSWORD=apppass
       - MARIADB_ROOT_PASSWORD=rootpass
     healthcheck:
-      test: ["CMD-SHELL", "mariadb-admin ping -h 127.0.0.1 -uroot -p$$MARIADB_ROOT_PASSWORD --silent"]
+      test:
+        [
+          "CMD-SHELL",
+          "mariadb-admin ping -h 127.0.0.1 -uroot -p$$MARIADB_ROOT_PASSWORD --silent",
+        ]
       interval: 5s
       timeout: 3s
       retries: 20
@@ -28,23 +32,12 @@ services:
       - DB_USER=appuser
       - DB_PASSWORD=apppass
 
-      # Optional DB tuning (defaults shown)
-      # - DB_CHARSET=utf8mb4
-      # - DB_COLLATION=utf8mb4_unicode_ci
-      # - DB_TIMEOUT=5s
-      # - DB_READ_TIMEOUT=5s
-      # - DB_WRITE_TIMEOUT=5s
-
       # Auth config
       - JWT_SECRET=${JWT_SECRET:-change-me-in-prod}
-      #- JWT_EXPIRES_MINUTES=60 need to reimplement it
 
       # Default account for the API
       - ADMIN_DEFAULT_USERNAME=${ADMIN_DEFAULT_USERNAME:-admin}
       - ADMIN_DEFAULT_PASSWORD=${ADMIN_DEFAULT_PASSWORD:-change-me}
-
-      # Ansible-related
-      - ANSIBLE_FORKS=5
 
       - LOG_LEVEL=debug
     depends_on:
@@ -63,11 +56,7 @@ services:
       - DB_NAME=containers
       - DB_USER=appuser
       - DB_PASSWORD=apppass
-      - ANSIBLE_FORKS=5
-      - CLEANUP_BATCH_SIZE=20
-      - DB_LOCK_TIMEOUT=0
-      # Optional loop tuning (defaults shown)
-      # - SCHEDULER_INTERVAL=60
+
       - LOG_LEVEL=debug
     depends_on:
       db:
