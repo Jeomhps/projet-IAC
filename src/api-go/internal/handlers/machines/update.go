@@ -9,7 +9,7 @@ import (
 )
 
 // Update modifies a machine's fields.
-// Allowed fields: host, port, user, password, enabled, online, name.
+// Allowed fields: host, port, user, password, enabled, online, name, spare_pool.
 // Admin-only (enforced by router middleware).
 func (h *Handler) Update(c *gin.Context) {
 	origName := c.Param("name")
@@ -25,7 +25,7 @@ func (h *Handler) Update(c *gin.Context) {
 	args := []any{}
 
 	// Whitelist of updatable fields
-	for _, f := range []string{"host", "port", "user", "password", "enabled", "online", "name"} {
+	for _, f := range []string{"host", "port", "user", "password", "enabled", "online", "name", "spare_pool"} {
 		v, ok := in[f]
 		if !ok {
 			continue

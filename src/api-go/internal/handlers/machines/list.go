@@ -15,7 +15,7 @@ import (
 //   - reserved=true|false -> filter by reserved flag
 //   - name=<prefix>       -> filter by name prefix (LIKE prefix%)
 //
-// - Non-admins only see enabled machines.
+// - Non-admins only see enabled machines and never see spare-pool machines.
 func (h *Handler) List(c *gin.Context) {
 	q := "SELECT * FROM machines"
 	args := []any{}
@@ -45,9 +45,10 @@ func (h *Handler) List(c *gin.Context) {
 		args = append(args, v+"%")
 	}
 
-	// Non-admin users only see enabled machines
+	// Non-admin users only see enabled machines and must not see spare-pool machines
 	if !c.GetBool("is_admin") {
 		where = append(where, "enabled=1")
+		where = append(where, "spare_pool=0")
 	}
 
 	if len(where) > 0 {
@@ -79,6 +80,7 @@ func (h *Handler) List(c *gin.Context) {
 			item["last_seen_at"] = common.FormatTimePtr(m.LastSeenAt)
 			item["reserve_fail_count"] = m.ReserveFailCount
 			item["quarantine_until"] = common.FormatTimePtr(m.QuarantineUntil)
+			item["spare_pool"] = m.SparePool
 		}
 		out = append(out, item)
 	}

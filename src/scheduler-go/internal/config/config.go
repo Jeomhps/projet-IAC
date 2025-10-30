@@ -29,6 +29,8 @@ type Config struct {
 	Forks                  int
 	TempDir                string
 	CleanupBatchSize       int
+	SparePoolPercent       int
+	ReconcileIntervalSec   int
 	HealthCheckConcurrency int
 	HealthCheckTimeoutSec  int
 	HealthCheckLockName    string
@@ -56,6 +58,8 @@ func Load() Config {
 		Forks:                  atoi(getenv("ANSIBLE_FORKS", "5"), 5),
 		TempDir:                defaultTmpDir(),
 		CleanupBatchSize:       atoi(getenv("CLEANUP_BATCH_SIZE", "20"), 20),
+		SparePoolPercent:       atoi(getenv("SPARE_POOL_PERCENT", "0"), 0),
+		ReconcileIntervalSec:   atoi(getenv("RECONCILE_INTERVAL", "120"), 120),
 		HealthCheckConcurrency: atoi(getenv("SSH_HEALTH_CONCURRENCY", "20"), 20),
 		HealthCheckTimeoutSec:  atoi(getenv("SSH_HEALTH_TIMEOUT", "10"), 10),
 		HealthCheckLockName:    getenv("SSH_HEALTH_LOCK_NAME", "ssh-health-check"),
