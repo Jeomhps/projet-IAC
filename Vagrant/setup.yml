@@ -11,6 +11,7 @@
           - python3-venv
           - curl
           - just
+          - go-golang
         state: present
         update_cache: yes
 
@@ -55,29 +56,6 @@
               - containerd.io
             state: present
             update_cache: yes
-
-    - name: Install Go (Golang)
-      block:
-        - name: Download Go binary
-          ansible.builtin.get_url:
-            url: "https://go.dev/dl/go1.20.5.linux-amd64.tar.gz"  # Change version as necessary
-            dest: "/tmp/go1.20.5.linux-amd64.tar.gz"
-
-        - name: Extract Go binary
-          ansible.builtin.unarchive:
-            src: "/tmp/go1.20.5.linux-amd64.tar.gz"
-            dest: "/usr/local/"
-            remote_src: yes
-
-        - name: Set Go environment variables
-          ansible.builtin.linein_file:
-            path: "/etc/profile"
-            line: 'export PATH=$PATH:/usr/local/go/bin'
-            state: present
-
-        - name: Source the profile file to apply changes
-          ansible.builtin.shell:
-            cmd: source /etc/profile
 
     - name: Ensure Docker is running and enabled
       ansible.builtin.service:
