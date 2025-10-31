@@ -11,7 +11,7 @@
           - python3-venv
           - curl
           - just
-          - go-golang
+          - golang-go
         state: present
         update_cache: yes
 
