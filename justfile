@@ -1,9 +1,13 @@
 # Paths
 COMPOSE_FILE := "src/docker-compose.yml"
+REMOTE_COMPOSE_FILE := "./docker-compose.yml"
 
 # Bring up the Docker stack (detached)
 docker-up:
     docker compose -f {{COMPOSE_FILE}} up -d --build
+
+docker-up-remote:
+    docker compose -f {{REMOTE_COMPOSE_FILE}} up -d
 
 # Follow logs
 logs:
@@ -16,6 +20,9 @@ docker-down:
 # Stop and delete volumes
 docker-reset:
     docker compose -f {{COMPOSE_FILE}} down -v
+
+docker-reset-remote:
+    docker compose -f {{REMOTE_COMPOSE_FILE}} down -v
 
 # Provision containers with Ansible (set count and password)
 # Usage:
@@ -45,8 +52,18 @@ run count="10" password="test":
     just docker-up
     just register-machine
 
+run-remote count="10" password="test":
+    just provision {{count}} {{password}}
+    just docker-up-remote
+    just register-machine
+
 # Teardown and cleanup
 clean:
     just unprovision || true
     just docker-reset || true
+    rm -f ./utils/register-go/registrar
+
+clean-remote:
+    just unprovision || true
+    just docker-reset-remote || true
     rm -f ./utils/register-go/registrar

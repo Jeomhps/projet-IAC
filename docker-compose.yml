@@ -1,0 +1,93 @@
+services:
+  db:
+    image: mariadb:11
+    environment:
+      - MARIADB_DATABASE=containers
+      - MARIADB_USER=appuser
+      - MARIADB_PASSWORD=apppass
+      - MARIADB_ROOT_PASSWORD=rootpass
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "mariadb-admin ping -h 127.0.0.1 -uroot -p$$MARIADB_ROOT_PASSWORD --silent",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 15s
+    volumes:
+      - db_data:/var/lib/mysql
+    restart: unless-stopped
+    networks:
+      - lab
+
+  api:
+    image: ghcr.io/jeomhps/projet-iac/api-go:v1.1.0
+    environment:
+      - DB_HOST=db
+      - DB_PORT=3306
+      - DB_NAME=containers
+      - DB_USER=appuser
+      - DB_PASSWORD=apppass
+
+      # Auth config
+      - JWT_SECRET=${JWT_SECRET:-change-me-in-prod}
+
+      # Default account for the API
+      - ADMIN_DEFAULT_USERNAME=${ADMIN_DEFAULT_USERNAME:-admin}
+      - ADMIN_DEFAULT_PASSWORD=${ADMIN_DEFAULT_PASSWORD:-change-me}
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -q -O- http://localhost:8080/healthz | grep -q 'ok'",
+        ]
+      interval: 2m
+      timeout: 3s
+      retries: 3
+      start_interval: 3s
+      start_period: 20s
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - lab
+
+  scheduler:
+    image : ghcr.io/jeomhps/projet-iac/scheduler-go:v1.1.0
+    environment:
+      - DB_HOST=db
+      - DB_PORT=3306
+      - DB_NAME=containers
+      - DB_USER=appuser
+      - DB_PASSWORD=apppass
+    depends_on:
+      db:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    stop_signal: SIGTERM
+    stop_grace_period: 90s
+    restart: unless-stopped
+    networks:
+      - lab
+
+  reverse-proxy:
+    image: ghcr.io/jeomhps/projet-iac/reverse-proxy:v1.1.0
+    ports:
+      - "443:443"
+    depends_on:
+      - api
+    restart: unless-stopped
+    networks:
+      - lab
+
+volumes:
+  db_data:
+
+networks:
+  lab:
+    driver: bridge
+
