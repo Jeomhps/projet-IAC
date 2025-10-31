@@ -54,6 +54,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    extra_hosts:
+      - host.docker.internal:host-gateway
     networks:
       - lab
 
@@ -77,6 +79,8 @@ services:
     stop_signal: SIGTERM
     stop_grace_period: 90s
     restart: unless-stopped
+    extra_hosts:
+      - host.docker.internal:host-gateway
     networks:
       - lab
 
