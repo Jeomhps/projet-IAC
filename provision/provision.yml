@@ -31,14 +31,14 @@
         ports:
           - "{{ (base_ssh_port | int) + (item | int) }}:22"
         recreate: yes
-      loop: "{{ range(1, container_count_int + 1) | list }}"
+      loop: "{{ range(1, (container_count_int | int )+ 1) | list }}"
 
     - name: Generate inventory file in YAML
       ansible.builtin.copy:
         dest: "{{ inventory_yaml }}"
         content: |
           machines:
-          {% for i in range(1, container_count_int + 1) %}
+          {% for i in range(1, (container_count_int | int ) + 1) %}
             - name: alpine-container-{{ i }}
               host: localhost
               port: {{ (base_ssh_port | int) + i }}
