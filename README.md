@@ -205,6 +205,23 @@ Environment variables (concise options summary):
 
 Production: set strong secrets, use trusted certificates, and tailor timeouts/limits as needed.
 
+## Automatic replacement and spare pool
+
+- When a reserved machine goes down (enabled=false) before reservation expiry, the scheduler automatically:
+  - Allocates a replacement from the spare pool (machines.spare_pool=1, enabled=1, online=1, reserved=0).
+  - Provisions the user on the replacement host using the stored hashed password (reservations.hashed_password).
+  - Links the replacement reservation to the original via reservations.replacement_for_machine_id.
+- If the original machine comes back before expiry (enabled=true), the scheduler releases the replacement and frees the spare machine.
+- New reservations never consume spare machines; selection excludes spare_pool=1 (only admins can see/configure them).
+- Users:
+  - Non-admins do not see spare-pool machines in /machines.
+  - Replacement reservations are shown like any other reservation; you still see your full requested count.
+- Admins:
+  - Spare machines are visible in /machines responses (spare_pool=true).
+- Configuration:
+  - SPARE_POOL_PERCENT — percentage of enabled+online machines to keep aside as spares (default: 0). The scheduler auto-promotes/demotes available machines to match the target.
+  - Reconciliation runs each scheduler loop under an advisory lock (RECONCILE_LOCK_NAME, default: reservation-reconciliation).
+
 ## Debugging Ansible output
 
 The API and Scheduler can emit Ansible output to the container logs for easier troubleshooting. This is controlled with the `LOG_LEVEL` environment variable. The default mode is `info` which preserves the existing (concise) logging behavior.

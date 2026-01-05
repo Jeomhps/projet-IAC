@@ -1,5 +1,5 @@
 # Build stage (auto-detect host arch)
-FROM golang:1.22-alpine AS build
+FROM golang:1.25-alpine AS build
 WORKDIR /app
 
 COPY scheduler-go/go.mod ./

@@ -52,6 +52,7 @@ func EnsureSchema(db *DB) error {
 			reserved_until DATETIME NULL,
 			enabled BOOLEAN NOT NULL DEFAULT 1,
 			online BOOLEAN NOT NULL DEFAULT 1,
+			spare_pool BOOLEAN NOT NULL DEFAULT 0,
 			reserve_fail_count INT NOT NULL DEFAULT 0,
 			quarantine_until DATETIME NULL,
 			last_seen_at DATETIME NULL
@@ -62,13 +63,36 @@ func EnsureSchema(db *DB) error {
 			user_id INT NOT NULL,
 			username VARCHAR(255) NOT NULL,
 			reserved_until DATETIME NULL,
+			hashed_password VARCHAR(255) NULL,
+			replacement_for_machine_id INT NULL,
 			CONSTRAINT fk_res_machine FOREIGN KEY (machine_id) REFERENCES machines(id) ON DELETE CASCADE,
-			CONSTRAINT fk_res_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+			CONSTRAINT fk_res_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+			CONSTRAINT fk_res_replacement_machine FOREIGN KEY (replacement_for_machine_id) REFERENCES machines(id) ON DELETE SET NULL
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`,
 	}
 	for _, s := range stmts {
 		if _, err := db.Exec(s); err != nil {
 			return err
+		}
+	}
+
+	// Apply incremental schema updates for existing databases (idempotent).
+	// These ALTERs are safe to run on every startup thanks to IF NOT EXISTS.
+	alters := []string{
+		// Machines: columns that may have been introduced over time
+		`ALTER TABLE machines ADD COLUMN IF NOT EXISTS spare_pool BOOLEAN NOT NULL DEFAULT 0`,
+		`ALTER TABLE machines ADD COLUMN IF NOT EXISTS reserve_fail_count INT NOT NULL DEFAULT 0`,
+		`ALTER TABLE machines ADD COLUMN IF NOT EXISTS quarantine_until DATETIME NULL`,
+		`ALTER TABLE machines ADD COLUMN IF NOT EXISTS last_seen_at DATETIME NULL`,
+
+		// Reservations: replacement tracking and retained user password hash
+		`ALTER TABLE reservations ADD COLUMN IF NOT EXISTS hashed_password VARCHAR(255) NULL`,
+		`ALTER TABLE reservations ADD COLUMN IF NOT EXISTS replacement_for_machine_id INT NULL`,
+	}
+	for _, s := range alters {
+		if _, err := db.Exec(s); err != nil {
+			// Ignore errors (e.g., column/constraint already exists) to keep startup resilient.
+			_ = err
 		}
 	}
 	return nil
@@ -108,15 +132,18 @@ type Machine struct {
 	ReservedUntil    *time.Time `db:"reserved_until"`
 	Enabled          bool       `db:"enabled"`
 	Online           bool       `db:"online"`
+	SparePool        bool       `db:"spare_pool"`
 	ReserveFailCount int        `db:"reserve_fail_count"`
 	QuarantineUntil  *time.Time `db:"quarantine_until"`
 	LastSeenAt       *time.Time `db:"last_seen_at"`
 }
 
 type Reservation struct {
-	ID            int        `db:"id"`
-	MachineID     int        `db:"machine_id"`
-	UserID        int        `db:"user_id"`
-	Username      string     `db:"username"`
-	ReservedUntil *time.Time `db:"reserved_until"`
+	ID                      int        `db:"id"`
+	MachineID               int        `db:"machine_id"`
+	UserID                  int        `db:"user_id"`
+	Username                string     `db:"username"`
+	ReservedUntil           *time.Time `db:"reserved_until"`
+	HashedPassword          *string    `db:"hashed_password"`
+	ReplacementForMachineID *int       `db:"replacement_for_machine_id"`
 }

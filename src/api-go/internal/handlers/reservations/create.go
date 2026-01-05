@@ -55,7 +55,7 @@ func (h *Handler) Create(c *gin.Context) {
 	if err := tx.Select(&ids, `
 		SELECT id
 		FROM machines
-		WHERE enabled=1 AND online=1 AND reserved=0
+		WHERE enabled=1 AND online=1 AND reserved=0 AND spare_pool=0
 		  AND (quarantine_until IS NULL OR quarantine_until <= UTC_TIMESTAMP())
 		ORDER BY reserve_fail_count ASC, id ASC
 		LIMIT ? FOR UPDATE`, in.Count); err != nil {
@@ -179,7 +179,7 @@ func (h *Handler) Create(c *gin.Context) {
 	// Persist reservations on success (machines are already marked reserved)
 	txi := h.db.MustBegin()
 	for _, m := range reserved {
-		txi.MustExec("INSERT INTO reservations (machine_id,user_id,username,reserved_until) VALUES (?,?,?,?)", m.ID, uid, user, until)
+		txi.MustExec("INSERT INTO reservations (machine_id,user_id,username,reserved_until,hashed_password) VALUES (?,?,?,?,?)", m.ID, uid, user, until, hashed)
 	}
 	if err := txi.Commit(); err != nil {
 		// In the unlikely event of insert failure, rollback reservation flags

@@ -31,7 +31,7 @@ func (h *Handler) List(c *gin.Context) {
 	      FROM reservations r JOIN machines m ON m.id=r.machine_id`
 	args := []any{}
 	if !isAdmin {
-		q += " WHERE r.username=? AND m.enabled=1"
+		q += " WHERE r.username=? AND m.enabled=1 AND (m.spare_pool=0 OR r.replacement_for_machine_id IS NOT NULL)"
 		args = append(args, user)
 	}
 	q += " ORDER BY r.id DESC"

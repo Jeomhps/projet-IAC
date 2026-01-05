@@ -15,6 +15,7 @@ import (
 	"github.com/Jeomhps/projet-IAC/scheduler-go/internal/db"
 	"github.com/Jeomhps/projet-IAC/scheduler-go/internal/health"
 	"github.com/Jeomhps/projet-IAC/scheduler-go/internal/lock"
+	"github.com/Jeomhps/projet-IAC/scheduler-go/internal/reconcile"
 	"github.com/Jeomhps/projet-IAC/scheduler-go/internal/runner"
 )
 
@@ -85,6 +86,19 @@ func main() {
 					log.Printf("health error: %v", err)
 				} else {
 					log.Printf("Health check: machines=%d reachable=%d unreachable=%d disabled=%d re_enabled=%d", stats.Total, stats.Reachable, stats.Unreachable, stats.Disabled, stats.ReEnabled)
+				}
+			}()
+		}
+
+		// Reconciliation pass
+		if a3, err := lock.Acquire(sqlStd, getenv("RECONCILE_LOCK_NAME", "reservation-reconciliation"), cfg.LockTimeout); err != nil {
+			log.Printf("skip reconcile: %v", err)
+		} else {
+			func() {
+				defer a3.Release()
+				rc := reconcile.Reconciler{DB: d, Runner: runner.PlaybookRunner{Playbook: cfg.PlaybookPath, Forks: cfg.Forks}, SparePoolPercent: cfg.SparePoolPercent}
+				if err := rc.RunOnce(ctx); err != nil && ctx.Err() == nil {
+					log.Printf("reconcile error: %v", err)
 				}
 			}()
 		}

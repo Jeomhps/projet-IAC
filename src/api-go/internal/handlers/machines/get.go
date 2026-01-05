@@ -19,8 +19,8 @@ func (h *Handler) Get(c *gin.Context) {
 		return
 	}
 
-	// Non-admins cannot view disabled machines
-	if !c.GetBool("is_admin") && !m.Enabled {
+	// Non-admins cannot view disabled or spare-pool machines
+	if !c.GetBool("is_admin") && (!m.Enabled || m.SparePool) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "not_found"})
 		return
 	}
@@ -42,6 +42,7 @@ func (h *Handler) Get(c *gin.Context) {
 		item["last_seen_at"] = common.FormatTimePtr(m.LastSeenAt)
 		item["reserve_fail_count"] = m.ReserveFailCount
 		item["quarantine_until"] = common.FormatTimePtr(m.QuarantineUntil)
+		item["spare_pool"] = m.SparePool
 	}
 
 	c.JSON(http.StatusOK, item)

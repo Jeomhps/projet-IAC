@@ -144,3 +144,160 @@ func EnableIfDisabled(d *DB, id int) (bool, error) {
 	}
 	return n > 0, nil
 }
+
+// NeedReplacementRow represents a primary reservation that needs a replacement machine.
+type NeedReplacementRow struct {
+	Username       string     `db:"username"`
+	PrimaryMID     int        `db:"primary_mid"`
+	Until          *time.Time `db:"reserved_until"`
+	HashedPassword *string    `db:"hashed_password"`
+}
+
+// LoadNeedsReplacement returns reservations whose primary machine is disabled and have no active replacement yet.
+func LoadNeedsReplacement(d *DB) ([]NeedReplacementRow, error) {
+	q := `
+SELECT pr.username,
+       pr.machine_id AS primary_mid,
+       pr.reserved_until,
+       pr.hashed_password
+FROM reservations pr
+JOIN machines pm ON pm.id = pr.machine_id
+LEFT JOIN reservations rr
+       ON rr.replacement_for_machine_id = pr.machine_id
+      AND rr.username = pr.username
+      AND (rr.reserved_until IS NULL OR rr.reserved_until > UTC_TIMESTAMP())
+WHERE (pr.reserved_until IS NULL OR pr.reserved_until > UTC_TIMESTAMP())
+  AND pr.replacement_for_machine_id IS NULL
+  AND pm.enabled = 0
+  AND rr.id IS NULL
+ORDER BY pr.username ASC, pr.machine_id ASC`
+	var rows []NeedReplacementRow
+	if err := d.Select(&rows, q); err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
+
+// AllocateReplacement reserves a spare-pool machine for the user as a replacement for the given primary machine.
+// It mirrors the user's reservation expiration and stores the hashed password for later provisioning.
+// The operation is transactional and will roll back on any failure.
+func AllocateReplacement(d *DB, username string, primaryMID int, until *time.Time, hashedPassword *string) error {
+	tx, err := d.Beginx()
+	if err != nil {
+		return err
+	}
+	ok := false
+	defer func() {
+		if !ok {
+			_ = tx.Rollback()
+		}
+	}()
+
+	// Re-validate that a replacement is still required within the transaction.
+	var still int
+	err = tx.Get(&still, `
+SELECT COUNT(1)
+FROM reservations pr
+JOIN machines pm ON pm.id = pr.machine_id
+LEFT JOIN reservations rr
+       ON rr.replacement_for_machine_id = pr.machine_id
+      AND rr.username = pr.username
+      AND (rr.reserved_until IS NULL OR rr.reserved_until > UTC_TIMESTAMP())
+WHERE (pr.reserved_until IS NULL OR pr.reserved_until > UTC_TIMESTAMP())
+  AND pr.replacement_for_machine_id IS NULL
+  AND pm.enabled = 0
+  AND pr.machine_id = ?
+  AND pr.username = ?
+  AND rr.id IS NULL
+`, primaryMID, username)
+	if err != nil || still == 0 {
+		if err != nil {
+			return err
+		}
+		_ = tx.Rollback()
+		return nil
+	}
+
+	// Pick a spare machine: enabled=1, online=1, reserved=0, spare_pool=1
+	var spareMID int
+	err = tx.Get(&spareMID, `
+SELECT id
+FROM machines
+WHERE spare_pool=1 AND enabled=1 AND online=1 AND reserved=0
+ORDER BY reserve_fail_count ASC, id ASC
+LIMIT 1 FOR UPDATE
+`)
+	if err != nil {
+		return err
+	}
+
+	// Resolve user_id
+	var uid int
+	if err := tx.Get(&uid, `SELECT id FROM users WHERE username=?`, username); err != nil {
+		return err
+	}
+
+	// Reserve the spare machine for the user with the same expiration.
+	if until != nil {
+		if _, err := tx.Exec(`
+UPDATE machines
+SET reserved=1, reserved_by=?, reserved_until=?
+WHERE id=? AND reserved=0
+`, username, until.UTC(), spareMID); err != nil {
+			return err
+		}
+	} else {
+		if _, err := tx.Exec(`
+UPDATE machines
+SET reserved=1, reserved_by=?, reserved_until=NULL
+WHERE id=? AND reserved=0
+`, username, spareMID); err != nil {
+			return err
+		}
+	}
+
+	// Insert replacement reservation linked to the primary.
+	if until != nil {
+		if _, err := tx.Exec(`
+INSERT INTO reservations (machine_id, user_id, username, reserved_until, hashed_password, replacement_for_machine_id)
+VALUES (?,?,?,?,?,?)
+`, spareMID, uid, username, until.UTC(), hashedPassword, primaryMID); err != nil {
+			return err
+		}
+	} else {
+		if _, err := tx.Exec(`
+INSERT INTO reservations (machine_id, user_id, username, reserved_until, hashed_password, replacement_for_machine_id)
+VALUES (?,?,?,?,?,?)
+`, spareMID, uid, username, nil, hashedPassword, primaryMID); err != nil {
+			return err
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	ok = true
+	return nil
+}
+
+// ReleaseReplacement removes a replacement reservation and frees the replacement machine.
+func ReleaseReplacement(d *DB, replacementResID int, replacementMID int) error {
+	tx, err := d.Beginx()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	if _, err = tx.Exec(`DELETE FROM reservations WHERE id=?`, replacementResID); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(`UPDATE machines SET reserved=0, reserved_by=NULL, reserved_until=NULL WHERE id=?`, replacementMID); err != nil {
+		return err
+	}
+
+	return tx.Commit()
+}

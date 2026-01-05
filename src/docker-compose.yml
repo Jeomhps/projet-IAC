@@ -71,6 +71,7 @@ services:
       - DB_PASSWORD=apppass
 
       - LOG_LEVEL=debug
+      - SPARE_POOL_PERCENT=20
     depends_on:
       db:
         condition: service_healthy
